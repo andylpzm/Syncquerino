@@ -1,20 +1,37 @@
+// main entrypoint of the application wrapping the stack with necessary providers
+import React from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { ThemeProvider, useTheme } from './src/theme/ThemeContext';
+import { ActiveGroupProvider } from './src/context/ActiveGroupContext';
+import { StateProvider } from './src/context/StateContext';
+import { AppNavigator } from './src/navigation/AppNavigator';
 
-export default function App() {
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+
+function MainAppContent() {
+  const { isDark } = useTheme();
+
   return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <>
+      <AppNavigator />
+      <StatusBar style={isDark ? 'light' : 'dark'} />
+    </>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
+export default function App() {
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <ThemeProvider>
+          <ActiveGroupProvider>
+            <StateProvider>
+              <MainAppContent />
+            </StateProvider>
+          </ActiveGroupProvider>
+        </ThemeProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
+  );
+}
