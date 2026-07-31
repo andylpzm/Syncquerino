@@ -1,10 +1,8 @@
-// whiteboard notes screen displaying shared announcements and text clips with local base64 photo attachments (spark free plan compatible)
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  FlatList,
   Pressable,
   ActivityIndicator,
   Alert,
@@ -23,10 +21,11 @@ import * as z from 'zod';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../../theme/ThemeContext';
 import Animated, { FadeInDown, FadeOutDown, Layout, LinearTransition } from 'react-native-reanimated';
 import { useActiveGroup } from '../../context/ActiveGroupContext';
-import { Swipeable } from 'react-native-gesture-handler';
+import { Swipeable, FlatList } from 'react-native-gesture-handler';
 import { useAppState } from '../../context/StateContext';
 import { useIsOnline } from '../../hooks/useIsOnline';
 import { auth, db } from '../../services/firebase';
@@ -36,8 +35,8 @@ import * as Haptics from 'expo-haptics';
 
 // validation schema for adding notes
 const noteSchema = z.object({
-  title: z.string().min(1, 'note title is required'),
-  desc: z.string().min(1, 'note description is required'),
+  title: z.string().min(1, 'note title is required').max(100, 'title too long'),
+  desc: z.string().min(1, 'note description is required').max(500, 'description too long'),
 });
 
 type NoteFormData = z.infer<typeof noteSchema>;
@@ -93,6 +92,20 @@ export function NotesScreen() {
     resolver: zodResolver(noteSchema),
     defaultValues: { title: '', desc: '' },
   });
+
+  // reset transient open forms whenever screen loses focus
+  useFocusEffect(
+    React.useCallback(() => {
+      return () => {
+        setShowAddForm(false);
+        setIsEditModalVisible(false);
+        setEditingNoteId(null);
+        setSelectedImage(null);
+        setActivePhotoUrl(null);
+        reset();
+      };
+    }, [reset])
+  );
 
   // subscribe to shared notes in firestore
   useEffect(() => {
@@ -225,7 +238,7 @@ export function NotesScreen() {
     if (!activeGroup) return;
 
     const user = auth.currentUser;
-    const creatorName = user?.displayName || user?.email || 'roommate';
+    const creatorName = user?.displayName || user?.email || 'member';
 
     if (!isOnline) {
       // offline mode: save to local useReducer draft queue
@@ -234,7 +247,7 @@ export function NotesScreen() {
         title: data.title.trim(),
         desc: data.desc.trim(),
         assigneeName: creatorName,
-        dueDate: selectedImage || '', // using dueDate field as local carrier for draft photo string
+        imageUrl: selectedImage || '',
       });
       resetFormState();
       return;
@@ -300,7 +313,156 @@ export function NotesScreen() {
 
   const combinedData = [...localDrafts, ...items];
 
-  const currentUserIdentifier = auth.currentUser?.displayName || auth.currentUser?.email || 'roommate';
+  const currentUserIdentifier = auth.currentUser?.displayName || auth.currentUser?.email || 'member';
+
+  const renderNoteItem = useCallback(
+    ({ item }: { item: NoteItem }) => {
+      const isOwner = item.creatorName === currentUserIdentifier && !item.isDraft;
+      const panelWidth = isOwner ? 160 : 80;
+
+      return (
+        <Animated.View
+          entering={FadeInDown.duration(300)}
+          exiting={FadeOutDown.duration(300)}
+          layout={Layout.springify().mass(0.8)}
+        >
+          <Swipeable
+            ref={(ref) => {
+              if (ref) {
+                swipeableRefs.current.set(item.id, ref);
+              } else {
+                swipeableRefs.current.delete(item.id);
+              }
+            }}
+            onSwipeableWillOpen={() => {
+              swipeableRefs.current.forEach((sRef, sId) => {
+                if (sId !== item.id) {
+                  sRef.close();
+                }
+              });
+              setCurrentlyOpenId(item.id);
+            }}
+            onSwipeableClose={() => {
+              if (currentlyOpenId === item.id) {
+                setCurrentlyOpenId(null);
+              }
+            }}
+            containerStyle={{ borderRadius: radii.md, overflow: 'hidden' }}
+            renderRightActions={(progress, dragX) => {
+              const trans = dragX.interpolate({
+                inputRange: [-panelWidth - 100, -panelWidth, 0],
+                outputRange: [-100, 0, panelWidth],
+                extrapolateRight: 'clamp',
+              });
+              return (
+                <RNAnimated.View style={{ flexDirection: 'row', width: panelWidth, height: '100%', transform: [{ translateX: trans }] }}>
+                  {isOwner && (
+                    <Pressable
+                      style={[styles.swipeRightAction, { backgroundColor: theme.primary, width: 80, height: '100%' }]}
+                      onPress={() => {
+                        swipeableRefs.current.get(item.id)?.close();
+                        startEditNote(item);
+                      }}
+                    >
+                      <Ionicons name="create-outline" size={22} color="#ffffff" />
+                      <Text style={[styles.swipeActionText, { ...typography.caption }]}>Edit</Text>
+                    </Pressable>
+                  )}
+                  <Pressable
+                    style={[styles.swipeRightAction, { backgroundColor: theme.danger, width: 80, height: '100%', borderTopRightRadius: radii.md, borderBottomRightRadius: radii.md }]}
+                    onPress={() => {
+                      swipeableRefs.current.get(item.id)?.close();
+                      deleteNote(item);
+                    }}
+                  >
+                    <Ionicons name="trash-outline" size={22} color="#ffffff" />
+                    <Text style={[styles.swipeActionText, { ...typography.caption }]}>Delete</Text>
+                  </Pressable>
+                </RNAnimated.View>
+              );
+            }}
+          >
+            <Pressable
+              onPress={() => {
+                if (currentlyOpenId) {
+                  dismissSwipeables();
+                }
+              }}
+              style={({ pressed }) => [
+                styles.card,
+                {
+                  backgroundColor: theme.surface,
+                  borderColor: theme.border,
+                  borderWidth: 1,
+                  borderRadius: radii.md,
+                  padding: spacing.md,
+                  opacity: pressed && currentlyOpenId ? 0.9 : 1.0
+                }
+              ]}
+              disabled={!currentlyOpenId}
+            >
+              <View style={styles.cardHeader}>
+                <Text
+                  style={[
+                    styles.noteTitle,
+                    {
+                      color: theme.text,
+                      fontStyle: item.isDraft ? 'italic' : 'normal',
+                      ...typography.h2,
+                    },
+                  ]}
+                >
+                  {item.title} {item.isDraft && '(pending)'}
+                </Text>
+              </View>
+              <Text
+                style={[
+                  styles.noteBody,
+                  {
+                    color: theme.text,
+                    fontStyle: item.isDraft ? 'italic' : 'normal',
+                    ...typography.body,
+                    marginBottom: item.imageUrl ? 12 : 0,
+                  },
+                ]}
+              >
+                {item.desc}
+              </Text>
+
+              {item.imageUrl ? (
+                <Pressable
+                  onPress={() => {
+                    if (currentlyOpenId) {
+                      dismissSwipeables();
+                    } else {
+                      setActivePhotoUrl(item.imageUrl!);
+                    }
+                  }}
+                  style={styles.noteImageContainer}
+                >
+                  <Image
+                    source={{ uri: item.imageUrl }}
+                    style={[styles.noteImage, { borderRadius: radii.md }]}
+                    resizeMode="cover"
+                  />
+                </Pressable>
+              ) : null}
+
+              <View style={styles.cardFooter}>
+                <Text style={[styles.metaText, { color: theme.textMuted, ...typography.small }]}>
+                  posted by {item.creatorName}
+                </Text>
+                <Text style={[styles.metaText, { color: theme.textMuted, ...typography.small }]}>
+                  {item.createdAtText}
+                </Text>
+              </View>
+            </Pressable>
+          </Swipeable>
+        </Animated.View>
+      );
+    },
+    [currentUserIdentifier, currentlyOpenId, theme, radii, spacing, typography, startEditNote, deleteNote, dismissSwipeables]
+  );
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
@@ -312,7 +474,6 @@ export function NotesScreen() {
           return false;
         }}
       >
-        {/* network status header badge */}
         {!isOnline && (
           <View style={[styles.offlineBanner, { backgroundColor: theme.warning, borderRadius: radii.sm }]}>
             <Text style={[styles.offlineText, { ...typography.caption }]}>
@@ -321,7 +482,6 @@ export function NotesScreen() {
           </View>
         )}
 
-        {/* toggleable add new note form */}
         {showAddForm ? (
           <Animated.View
             entering={FadeInDown.duration(300)}
@@ -353,7 +513,7 @@ export function NotesScreen() {
               name="desc"
               render={({ field: { onChange, onBlur, value } }) => (
                 <Input
-                  placeholder="Tell the roomies the details..."
+                  placeholder="Tell the circle the details..."
                   onBlur={onBlur}
                   onChangeText={onChange}
                   value={value}
@@ -365,7 +525,6 @@ export function NotesScreen() {
               )}
             />
 
-            {/* photo attachment controls */}
             {selectedImage ? (
               <View style={styles.imagePreviewContainer}>
                 <Image source={{ uri: selectedImage }} style={[styles.imagePreview, { borderRadius: radii.md }]} />
@@ -416,7 +575,6 @@ export function NotesScreen() {
           </Animated.View>
         )}
 
-        {/* virtualized list of bulletins */}
         {loading ? (
           <ActivityIndicator size="large" color={theme.primary} style={styles.spinner} />
         ) : (
@@ -424,150 +582,7 @@ export function NotesScreen() {
             data={combinedData}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.listContainer}
-            renderItem={({ item }) => (
-              <Animated.View
-                entering={FadeInDown.duration(300)}
-                exiting={FadeOutDown.duration(300)}
-                layout={Layout.springify().mass(0.8)}
-              >
-                <Swipeable
-                  ref={(ref) => {
-                    if (ref) {
-                      swipeableRefs.current.set(item.id, ref);
-                    } else {
-                      swipeableRefs.current.delete(item.id);
-                    }
-                  }}
-                  onSwipeableWillOpen={() => {
-                    // Close any other open swipeables
-                    swipeableRefs.current.forEach((sRef, sId) => {
-                      if (sId !== item.id) {
-                        sRef.close();
-                      }
-                    });
-                    setCurrentlyOpenId(item.id);
-                  }}
-                  onSwipeableClose={() => {
-                    if (currentlyOpenId === item.id) {
-                      setCurrentlyOpenId(null);
-                    }
-                  }}
-                  containerStyle={{ borderRadius: radii.md, overflow: 'hidden' }}
-                  renderRightActions={(progress, dragX) => {
-                    const isOwner = item.creatorName === currentUserIdentifier && !item.isDraft;
-                    const panelWidth = isOwner ? 160 : 80;
-                    const trans = dragX.interpolate({
-                      inputRange: [-panelWidth - 100, -panelWidth, 0],
-                      outputRange: [-100, 0, panelWidth],
-                      extrapolateRight: 'clamp',
-                    });
-                    return (
-                      <RNAnimated.View style={{ flexDirection: 'row', width: panelWidth, height: '100%', transform: [{ translateX: trans }] }}>
-                        {isOwner && (
-                          <Pressable
-                            style={[styles.swipeRightAction, { backgroundColor: theme.primary, width: 80, height: '100%' }]}
-                            onPress={() => {
-                              swipeableRefs.current.get(item.id)?.close();
-                              startEditNote(item);
-                            }}
-                          >
-                            <Ionicons name="create-outline" size={22} color="#ffffff" />
-                            <Text style={[styles.swipeActionText, { ...typography.caption }]}>Edit</Text>
-                          </Pressable>
-                        )}
-                        <Pressable
-                          style={[styles.swipeRightAction, { backgroundColor: theme.danger, width: 80, height: '100%', borderTopRightRadius: radii.md, borderBottomRightRadius: radii.md }]}
-                          onPress={() => {
-                            swipeableRefs.current.get(item.id)?.close();
-                            deleteNote(item);
-                          }}
-                        >
-                          <Ionicons name="trash-outline" size={22} color="#ffffff" />
-                          <Text style={[styles.swipeActionText, { ...typography.caption }]}>Delete</Text>
-                        </Pressable>
-                      </RNAnimated.View>
-                    );
-                  }}
-                >
-                  <Pressable
-                    onPress={() => {
-                      if (currentlyOpenId) {
-                        dismissSwipeables();
-                      }
-                    }}
-                    style={({ pressed }) => [
-                      styles.card,
-                      {
-                        backgroundColor: theme.surface,
-                        borderColor: theme.border,
-                        borderWidth: 1,
-                        borderRadius: radii.md,
-                        padding: spacing.md,
-                        opacity: pressed && currentlyOpenId ? 0.9 : 1.0
-                      }
-                    ]}
-                    disabled={!currentlyOpenId}
-                  >
-                    <View style={styles.cardHeader}>
-                      <Text
-                        style={[
-                          styles.noteTitle,
-                          {
-                            color: theme.text,
-                            fontStyle: item.isDraft ? 'italic' : 'normal',
-                            ...typography.h2,
-                          },
-                        ]}
-                      >
-                        {item.title} {item.isDraft && '(pending)'}
-                      </Text>
-                    </View>
-                    <Text
-                      style={[
-                        styles.noteBody,
-                        {
-                          color: theme.text,
-                          fontStyle: item.isDraft ? 'italic' : 'normal',
-                          ...typography.body,
-                          marginBottom: item.imageUrl ? 12 : 0,
-                        },
-                      ]}
-                    >
-                      {item.desc}
-                    </Text>
-
-                    {/* render photo attachment if present */}
-                    {item.imageUrl ? (
-                      <Pressable
-                        onPress={() => {
-                          if (currentlyOpenId) {
-                            dismissSwipeables();
-                          } else {
-                            setActivePhotoUrl(item.imageUrl!);
-                          }
-                        }}
-                        style={styles.noteImageContainer}
-                      >
-                        <Image
-                          source={{ uri: item.imageUrl }}
-                          style={[styles.noteImage, { borderRadius: radii.md }]}
-                          resizeMode="cover"
-                        />
-                      </Pressable>
-                    ) : null}
-
-                    <View style={styles.cardFooter}>
-                      <Text style={[styles.metaText, { color: theme.textMuted, ...typography.small }]}>
-                        posted by {item.creatorName}
-                      </Text>
-                      <Text style={[styles.metaText, { color: theme.textMuted, ...typography.small }]}>
-                        {item.createdAtText}
-                      </Text>
-                    </View>
-                  </Pressable>
-                </Swipeable>
-              </Animated.View>
-            )}
+            renderItem={renderNoteItem}
             ListEmptyComponent={() => (
               <View style={styles.emptyState}>
                 <Text style={{ color: theme.textMuted, ...typography.body, textAlign: 'center' }}>

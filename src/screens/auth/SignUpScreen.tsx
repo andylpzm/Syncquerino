@@ -18,7 +18,7 @@ import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { AuthStackParamList } from '../../navigation/types';
 import { useTheme } from '../../theme/ThemeContext';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../../services/firebase';
 import { Input } from '../../components/Input';
 import { Button } from '../../components/Button';
@@ -32,10 +32,10 @@ interface SignUpScreenProps {
 // validation schema for registration
 const signUpSchema = z
   .object({
-    name: z.string().min(1, 'full name is required'),
-    email: z.string().min(1, 'email is required').email('must be a valid email address'),
-    password: z.string().min(6, 'password must be at least 6 characters'),
-    confirmPassword: z.string().min(1, 'confirming password is required'),
+    name: z.string().min(1, 'full name is required').max(50, 'name too long'),
+    email: z.string().min(1, 'email is required').max(100, 'email too long').email('must be a valid email address'),
+    password: z.string().min(6, 'password must be at least 6 characters').max(100, 'password too long'),
+    confirmPassword: z.string().min(1, 'confirming password is required').max(100, 'password too long'),
   })
   .refine((data) => data.password === data.confirmPassword, {
     message: 'passwords do not match',
@@ -54,46 +54,33 @@ export function SignUpScreen({ navigation }: SignUpScreenProps) {
     formState: { errors },
   } = useForm<SignUpFormData>({
     resolver: zodResolver(signUpSchema),
-    defaultValues: {
-      name: '',
-      email: '',
-      password: '',
-      confirmPassword: '',
-    },
   });
 
-  // register the user in firebase
+  // register new user with firebase auth and save display profile to firestore
   const onSubmit = async (data: SignUpFormData) => {
     setLoading(true);
     try {
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        data.email,
-        data.password
-      );
-      // update the firebase auth display name
+      const userCredential = await createUserWithEmailAndPassword(auth, data.email, data.password);
       if (userCredential.user) {
-        await updateProfile(userCredential.user, {
-          displayName: data.name,
-        });
-
-        // save user details in firestore users collection
-        await setDoc(doc(db, 'users', userCredential.user.uid), {
-          uid: userCredential.user.uid,
-          name: data.name,
-          email: data.email,
-          createdAt: new Date(),
-        });
+        await Promise.all([
+          updateProfile(userCredential.user, { displayName: data.name }),
+          setDoc(doc(db, 'users', userCredential.user.uid), {
+            uid: userCredential.user.uid,
+            name: data.name,
+            email: data.email,
+            createdAt: serverTimestamp(),
+          }),
+        ]);
       }
-    } catch (e: any) {
+    } catch (e) {
+      const err = e as { code?: string };
       let message = 'unable to create account. please try again.';
-      if (e.code === 'auth/email-already-in-use') {
+      if (err.code === 'auth/email-already-in-use') {
         message = 'an account already exists with this email address.';
-      } else if (e.code === 'auth/invalid-email') {
+      } else if (err.code === 'auth/invalid-email') {
         message = 'the email address is not valid.';
       }
       Alert.alert('Registration Error', message);
-    } finally {
       setLoading(false);
     }
   };
@@ -112,7 +99,7 @@ export function SignUpScreen({ navigation }: SignUpScreenProps) {
                 Create Account
               </Text>
               <Text style={[styles.subtitle, { color: theme.textMuted, ...typography.body }]}>
-                sign up to coordinate with household partners
+                sign up to coordinate with friends, family, or roommates
               </Text>
             </View>
 
@@ -258,7 +245,5 @@ const styles = StyleSheet.create({
   footerText: {
     textAlign: 'center',
   },
-  linkText: {
-    textDecorationLine: 'none',
-  },
+  linkText: {},
 });

@@ -14,11 +14,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { collection, query, where, getDocs, addDoc, updateDoc, arrayUnion, doc, onSnapshot } from 'firebase/firestore';
 import { signOut } from 'firebase/auth';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { auth, db } from '../../services/firebase';
 import { useTheme } from '../../theme/ThemeContext';
 import { useActiveGroup } from '../../context/ActiveGroupContext';
 import { Input } from '../../components/Input';
 import { Button } from '../../components/Button';
+import { RootStackParamList } from '../../navigation/types';
 
 interface GroupData {
   id: string;
@@ -26,7 +28,13 @@ interface GroupData {
   code: string;
 }
 
-export function GroupSelectScreen() {
+type GroupSelectNavigationProp = NativeStackNavigationProp<RootStackParamList, 'GroupSelect'>;
+
+interface GroupSelectProps {
+  navigation?: GroupSelectNavigationProp;
+}
+
+export function GroupSelectScreen({ navigation }: GroupSelectProps) {
   const { theme, spacing, radii, typography } = useTheme();
   const { setActiveGroup } = useActiveGroup();
   const [createName, setCreateName] = useState('');
@@ -112,6 +120,9 @@ export function GroupSelectScreen() {
         name: groupData.name,
         code: groupData.code,
       });
+      if (navigation?.canGoBack()) {
+        navigation.navigate('MainTabs');
+      }
     } catch (e: any) {
       Alert.alert('Database Error', 'failed to create group. please try again.');
     } finally {
@@ -157,6 +168,9 @@ export function GroupSelectScreen() {
         name: groupData.name,
         code: groupData.code,
       });
+      if (navigation?.canGoBack()) {
+        navigation.navigate('MainTabs');
+      }
     } catch (e) {
       Alert.alert('Database Error', 'failed to join group. please check connection.');
     } finally {
@@ -164,8 +178,16 @@ export function GroupSelectScreen() {
     }
   };
 
+  // select an existing group and navigate back to main tabs
+  const handleSelectGroup = async (group: GroupData) => {
+    await setActiveGroup(group);
+    if (navigation?.canGoBack()) {
+      navigation.navigate('MainTabs');
+    }
+  };
+
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
+    <SafeAreaView edges={['bottom', 'left', 'right']} style={[styles.safeArea, { backgroundColor: theme.background }]}>
       <KeyboardAvoidingView
         style={styles.keyboardView}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -177,15 +199,15 @@ export function GroupSelectScreen() {
                 Welcome to Syncquerino
               </Text>
               <Text style={[styles.subtitle, { color: theme.textMuted, ...typography.body }]}>
-                to start sharing lists and notes, select an existing group you belong to, create a new one, or join using an invite code.
+                to start sharing lists and notes, select an existing circle you belong to, create a new one, or join using an invite code.
               </Text>
             </View>
 
             <View style={styles.cardContainer}>
-              {/* list of existing user groups */}
+              {/* list of existing user circles */}
               <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
                 <Text style={[styles.cardTitle, { color: theme.text, ...typography.h2 }]}>
-                  Select From Your Groups
+                  Select From Your Circles
                 </Text>
                 {loadingGroups ? (
                   <ActivityIndicator size="small" color={theme.primary} style={styles.groupLoader} />
@@ -194,7 +216,7 @@ export function GroupSelectScreen() {
                     {myGroups.map((group) => (
                       <Pressable
                         key={group.id}
-                        onPress={() => setActiveGroup(group)}
+                        onPress={() => handleSelectGroup(group)}
                         style={({ pressed }) => [
                           styles.groupItem,
                           {
@@ -205,44 +227,46 @@ export function GroupSelectScreen() {
                           },
                         ]}
                       >
-                        <Text style={[styles.groupItemName, { color: theme.text, ...typography.body }]}>
-                          🏠 {group.name}
-                        </Text>
-                        <Text style={[styles.groupItemCode, { color: theme.textMuted, ...typography.caption }]}>
-                          code: {group.code}
-                        </Text>
+                        <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Text style={[styles.groupItemName, { color: theme.text, ...typography.body }]}>
+                            {group.name}
+                          </Text>
+                          <Text style={[styles.groupItemCode, { color: theme.primary, ...typography.small, fontWeight: '700' }]}>
+                            {group.code}
+                          </Text>
+                        </View>
                       </Pressable>
                     ))}
                   </View>
                 ) : (
                   <Text style={[styles.emptyGroupText, { color: theme.textMuted, ...typography.small }]}>
-                    you do not belong to any household groups yet. create or join one below.
+                    you do not belong to any circles yet. create or join one below.
                   </Text>
                 )}
               </View>
 
-              {/* create group card */}
+              {/* create circle card */}
               <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
                 <Text style={[styles.cardTitle, { color: theme.text, ...typography.h2 }]}>
-                  Create a New Group
+                  Create a New Circle
                 </Text>
                 <Input
-                  placeholder="Group Name"
+                  placeholder="Circle Name"
                   value={createName}
                   onChangeText={setCreateName}
                   autoCorrect={false}
                 />
                 <Button
-                  title="Create Group"
+                  title="Create Circle"
                   onPress={handleCreateGroup}
                   loading={loadingCreate}
                 />
               </View>
 
-              {/* join group card */}
+              {/* join circle card */}
               <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
                 <Text style={[styles.cardTitle, { color: theme.text, ...typography.h2 }]}>
-                  Join Existing Group
+                  Join Existing Circle
                 </Text>
                 <Input
                   placeholder="enter 6-letter code"
@@ -253,20 +277,13 @@ export function GroupSelectScreen() {
                   maxLength={6}
                 />
                 <Button
-                  title="Join Group"
+                  title="Join Circle"
                   onPress={handleJoinGroup}
                   variant="secondary"
                   loading={loadingJoin}
                 />
               </View>
             </View>
-
-            <Button
-              title="Sign Out"
-              onPress={handleLogout}
-              variant="danger"
-              style={styles.signOutBtn}
-            />
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -320,7 +337,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   groupItem: {
-    padding: 12,
+    padding: 14,
+    borderRadius: 10,
     borderWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',

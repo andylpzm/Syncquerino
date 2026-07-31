@@ -25,7 +25,7 @@ export function WelcomeScreen({ navigation }: WelcomeScreenProps) {
             Syncquerino
           </Text>
           <Text style={[styles.subtitle, { color: theme.textMuted, ...typography.body }]}>
-            keep household needs, groceries, reminders, and notes synced in real time.
+            keep shared needs, groceries, reminders, and notes synced in real time.
           </Text>
         </View>
 

@@ -3,8 +3,6 @@ import React from 'react';
 import { Pressable, Text, ActivityIndicator, StyleSheet, ViewStyle } from 'react-native';
 import { useTheme } from '../theme/ThemeContext';
 
-import { LinearGradient } from 'expo-linear-gradient';
-
 interface ButtonProps {
   title: string;
   onPress: () => void;
@@ -26,16 +24,16 @@ export function Button({
 
   // compute background and text color based on variant
   let backgroundColor = theme.primary;
-  let textColor = '#ffffff';
+  let textColor = theme.surface;
   let borderColor = 'transparent';
   let borderWidth = 0;
 
   if (variant === 'secondary') {
     backgroundColor = theme.secondary;
-    textColor = '#ffffff';
+    textColor = theme.surface;
   } else if (variant === 'danger') {
     backgroundColor = theme.danger;
-    textColor = '#ffffff';
+    textColor = theme.surface;
   } else if (variant === 'outline') {
     backgroundColor = 'transparent';
     textColor = theme.primary;
@@ -44,10 +42,6 @@ export function Button({
   }
 
   const isBtnDisabled = disabled || loading;
-  const useGradient = variant === 'primary' || variant === 'secondary';
-  const gradientColors = (variant === 'primary'
-    ? [theme.primary, theme.secondary]
-    : ['#10b981', '#06b6d4']) as [string, string, ...string[]]; // emerald to cyan gradient
 
   return (
     <Pressable
@@ -56,47 +50,22 @@ export function Button({
       style={({ pressed }) => [
         styles.button,
         {
+          backgroundColor,
           borderColor,
           borderWidth,
+          padding: spacing.md,
           borderRadius: radii.full,
           opacity: isBtnDisabled ? 0.6 : pressed ? 0.9 : 1.0,
-        },
-        !useGradient && {
-          backgroundColor,
-          padding: spacing.md,
         },
         style,
       ]}
     >
-      {useGradient ? (
-        <LinearGradient
-          colors={gradientColors}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-          style={[
-            styles.gradient,
-            {
-              padding: spacing.md,
-              borderRadius: radii.full,
-            },
-          ]}
-        >
-          {loading ? (
-            <ActivityIndicator color={textColor} size="small" />
-          ) : (
-            <Text style={[styles.text, { color: textColor, ...typography.body }]}>
-              {title}
-            </Text>
-          )}
-        </LinearGradient>
+      {loading ? (
+        <ActivityIndicator color={textColor} size="small" />
       ) : (
-        loading ? (
-          <ActivityIndicator color={textColor} size="small" />
-        ) : (
-          <Text style={[styles.text, { color: textColor, ...typography.body }]}>
-            {title}
-          </Text>
-        )
+        <Text style={[styles.text, { color: textColor, ...typography.body }]}>
+          {title}
+        </Text>
       )}
     </Pressable>
   );
@@ -104,19 +73,11 @@ export function Button({
 
 const styles = StyleSheet.create({
   button: {
-    width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-    flexDirection: 'row',
   },
   text: {
-    fontWeight: '600',
+    fontWeight: '700',
     textAlign: 'center',
-  },
-  gradient: {
-    width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
   },
 });

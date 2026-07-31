@@ -30,8 +30,8 @@ interface LoginScreenProps {
 
 // validation schema for login credentials
 const loginSchema = z.object({
-  email: z.string().min(1, 'email is required').email('must be a valid email address'),
-  password: z.string().min(6, 'password must be at least 6 characters'),
+  email: z.string().min(1, 'email is required').max(100, 'email too long').email('must be a valid email address'),
+  password: z.string().min(6, 'password must be at least 6 characters').max(100, 'password too long'),
 });
 
 type LoginFormData = z.infer<typeof loginSchema>;
@@ -46,10 +46,6 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
     formState: { errors },
   } = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
-    defaultValues: {
-      email: '',
-      password: '',
-    },
   });
 
   // attempt authentication with firebase
@@ -57,11 +53,12 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
     setLoading(true);
     try {
       await signInWithEmailAndPassword(auth, data.email, data.password);
-    } catch (e: any) {
+    } catch (e) {
+      const err = e as { code?: string };
       let message = 'unable to log in. please check your details.';
-      if (e.code === 'auth/invalid-credential') {
+      if (err.code === 'auth/invalid-credential') {
         message = 'incorrect email or password.';
-      } else if (e.code === 'auth/user-not-found') {
+      } else if (err.code === 'auth/user-not-found') {
         message = 'no account found with this email.';
       }
       Alert.alert('Authentication Error', message);
@@ -195,7 +192,5 @@ const styles = StyleSheet.create({
   footerText: {
     textAlign: 'center',
   },
-  linkText: {
-    textDecorationLine: 'none',
-  },
+  linkText: {},
 });

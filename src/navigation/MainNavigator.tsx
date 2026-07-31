@@ -2,7 +2,7 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { Home, ShoppingCart, ClipboardList, StickyNote } from 'lucide-react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { MainTabParamList, RootStackParamList } from './types';
 import { DashboardScreen } from '../screens/main/DashboardScreen';
 import { GroceryListScreen } from '../screens/main/GroceryListScreen';
@@ -23,17 +23,18 @@ function MainTabs() {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
-        tabBarIcon: ({ color, size }) => {
+        tabBarIcon: ({ color, size, focused }) => {
+          let iconName: string = 'home-outline';
           if (route.name === 'Dashboard') {
-            return <Home color={color} size={size} />;
+            iconName = focused ? 'home' : 'home-outline';
           } else if (route.name === 'Groceries') {
-            return <ShoppingCart color={color} size={size} />;
+            iconName = focused ? 'cart' : 'cart-outline';
           } else if (route.name === 'Reminders') {
-            return <ClipboardList color={color} size={size} />;
+            iconName = focused ? 'checkbox' : 'checkbox-outline';
           } else if (route.name === 'Notes') {
-            return <StickyNote color={color} size={size} />;
+            iconName = focused ? 'document-text' : 'document-text-outline';
           }
-          return null;
+          return <Ionicons name={iconName as any} size={size} color={color} />;
         },
         tabBarActiveTintColor: theme.primary,
         tabBarInactiveTintColor: theme.textMuted,
@@ -58,24 +59,38 @@ function MainTabs() {
 // main stack wrapper for screens accessible when inside a group
 export function MainNavigator() {
   const { activeGroup } = useActiveGroup();
+  const { theme } = useTheme();
 
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator
+      initialRouteName={activeGroup ? 'MainTabs' : 'GroupSelect'}
+      screenOptions={{
+        headerStyle: { backgroundColor: theme.surface },
+        headerTintColor: theme.text,
+      }}
+    >
       {activeGroup ? (
         <>
-          <Stack.Screen name="MainTabs" component={MainTabs} />
+          <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} />
           <Stack.Screen
             name="GroupSettings"
             component={GroupSettingsScreen}
             options={{
               headerShown: true,
               title: 'Group Settings',
-              animation: 'slide_from_bottom',
+            }}
+          />
+          <Stack.Screen
+            name="GroupSelect"
+            component={GroupSelectScreen}
+            options={{
+              headerShown: true,
+              title: 'Select Group',
             }}
           />
         </>
       ) : (
-        <Stack.Screen name="GroupSelect" component={GroupSelectScreen} />
+        <Stack.Screen name="GroupSelect" component={GroupSelectScreen} options={{ headerShown: false }} />
       )}
     </Stack.Navigator>
   );

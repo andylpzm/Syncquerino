@@ -1,10 +1,8 @@
-// grocery list screen showing active and completed shopping items with local base64 photo attachments (spark free plan compatible)
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  FlatList,
   Pressable,
   ActivityIndicator,
   Alert,
@@ -19,8 +17,10 @@ import * as z from 'zod';
 import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../../theme/ThemeContext';
-import Animated, { FadeInDown, FadeOutDown, Layout, LinearTransition } from 'react-native-reanimated';
+import Animated, { FadeInDown, FadeOutDown, LinearTransition } from 'react-native-reanimated';
+import { Swipeable, FlatList } from 'react-native-gesture-handler';
 import { useActiveGroup } from '../../context/ActiveGroupContext';
 import { useAppState } from '../../context/StateContext';
 import { useIsOnline } from '../../hooks/useIsOnline';
@@ -29,7 +29,6 @@ import { Input } from '../../components/Input';
 import { Button } from '../../components/Button';
 import { AnimatedCheckbox } from '../../components/AnimatedCheckbox';
 import * as Haptics from 'expo-haptics';
-import { Swipeable } from 'react-native-gesture-handler';
 
 // validation schema for adding grocery items
 const grocerySchema = z.object({
@@ -80,6 +79,18 @@ export function GroceryListScreen() {
     resolver: zodResolver(grocerySchema),
     defaultValues: { title: '' },
   });
+
+  // reset transient open forms whenever screen loses focus
+  useFocusEffect(
+    React.useCallback(() => {
+      return () => {
+        setShowAddForm(false);
+        setSelectedImage(null);
+        setActivePhotoUrl(null);
+        reset();
+      };
+    }, [reset])
+  );
 
   // subscribe to grocery list items in firestore
   useEffect(() => {
@@ -157,7 +168,7 @@ export function GroceryListScreen() {
       addDraft({
         category: 'grocery',
         title: data.title.trim(),
-        desc: selectedImage || '', // using desc field to store base64 string locally
+        imageUrl: selectedImage || '',
       });
       resetFormState();
       return;
@@ -233,6 +244,120 @@ export function GroceryListScreen() {
     }));
 
   const combinedData = [...localDrafts, ...items];
+
+  const renderGroceryItem = useCallback(
+    ({ item }: { item: GroceryItem }) => (
+      <Animated.View
+        entering={FadeInDown.duration(300)}
+        exiting={FadeOutDown.duration(300)}
+        layout={LinearTransition}
+      >
+        <Swipeable
+          ref={(ref) => {
+            if (ref) {
+              swipeableRefs.current.set(item.id, ref);
+            } else {
+              swipeableRefs.current.delete(item.id);
+            }
+          }}
+          onSwipeableWillOpen={() => {
+            swipeableRefs.current.forEach((sRef, sId) => {
+              if (sId !== item.id) {
+                sRef.close();
+              }
+            });
+            setCurrentlyOpenId(item.id);
+          }}
+          onSwipeableClose={() => {
+            if (currentlyOpenId === item.id) {
+              setCurrentlyOpenId(null);
+            }
+          }}
+          containerStyle={{ borderRadius: radii.md, overflow: 'hidden' }}
+          renderRightActions={(progress, dragX) => {
+            const panelWidth = 80;
+            const trans = dragX.interpolate({
+              inputRange: [-panelWidth - 100, -panelWidth, 0],
+              outputRange: [-100, 0, panelWidth],
+              extrapolateRight: 'clamp',
+            });
+            return (
+              <RNAnimated.View style={{ width: panelWidth, height: '100%', transform: [{ translateX: trans }] }}>
+                <Pressable
+                  style={[styles.swipeRightAction, { backgroundColor: theme.danger, width: '100%', borderTopRightRadius: radii.md, borderBottomRightRadius: radii.md }]}
+                  onPress={() => {
+                    swipeableRefs.current.get(item.id)?.close();
+                    deleteItem(item);
+                  }}
+                >
+                  <Ionicons name="trash-outline" size={22} color="#ffffff" />
+                  <Text style={[styles.swipeActionText, { ...typography.caption }]}>Delete</Text>
+                </Pressable>
+              </RNAnimated.View>
+            );
+          }}
+        >
+          <View style={[styles.itemRow, { backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: radii.md, padding: spacing.md }]}>
+            <Pressable
+              onPress={() => {
+                if (currentlyOpenId) {
+                  dismissSwipeables();
+                } else {
+                  toggleItemStatus(item);
+                }
+              }}
+              style={styles.checkboxContainer}
+            >
+              <View pointerEvents="none">
+                <AnimatedCheckbox
+                  checked={item.status === 'completed'}
+                  isDraft={item.isDraft}
+                  onPress={() => {}}
+                />
+              </View>
+              <Text
+                style={[
+                  styles.itemText,
+                  {
+                    color: item.status === 'completed' || item.isDraft ? theme.textMuted : theme.text,
+                    textDecorationLine: item.status === 'completed' ? 'line-through' : 'none',
+                    fontStyle: item.isDraft ? 'italic' : 'normal',
+                    ...typography.body,
+                  },
+                ]}
+              >
+                {item.title}
+              </Text>
+              {item.isDraft && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: spacing.xs }}>
+                  <Ionicons name="time-outline" size={14} color="#f59e0b" />
+                  <Text style={{ color: theme.textMuted, fontStyle: 'italic', marginLeft: 2, ...typography.caption }}>
+                    (pending sync)
+                  </Text>
+                </View>
+              )}
+            </Pressable>
+
+            {item.imageUrl ? (
+              <Pressable
+                onPress={() => {
+                  if (currentlyOpenId) {
+                    dismissSwipeables();
+                  } else {
+                    setActivePhotoUrl(item.imageUrl!);
+                  }
+                }}
+                style={styles.thumbnailBtn}
+              >
+                <Image source={{ uri: item.imageUrl }} style={[styles.thumbnail, { borderRadius: radii.sm }]} />
+              </Pressable>
+            ) : null}
+          </View>
+        </Swipeable>
+      </Animated.View>
+    ),
+    [currentlyOpenId, theme, radii, spacing, typography, deleteItem, toggleItemStatus, dismissSwipeables]
+  );
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
@@ -340,110 +465,7 @@ export function GroceryListScreen() {
             data={combinedData}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.listContainer}
-            renderItem={({ item }) => (
-              <Animated.View
-                entering={FadeInDown.duration(300)}
-                exiting={FadeOutDown.duration(300)}
-                layout={Layout.springify().mass(0.8)}
-              >
-                <Swipeable
-                  ref={(ref) => {
-                    if (ref) {
-                      swipeableRefs.current.set(item.id, ref);
-                    } else {
-                      swipeableRefs.current.delete(item.id);
-                    }
-                  }}
-                  onSwipeableWillOpen={() => {
-                    // Close any other open swipeables
-                    swipeableRefs.current.forEach((sRef, sId) => {
-                      if (sId !== item.id) {
-                        sRef.close();
-                      }
-                    });
-                    setCurrentlyOpenId(item.id);
-                  }}
-                  onSwipeableClose={() => {
-                    if (currentlyOpenId === item.id) {
-                      setCurrentlyOpenId(null);
-                    }
-                  }}
-                  containerStyle={{ borderRadius: radii.md, overflow: 'hidden' }}
-                  renderRightActions={(progress, dragX) => {
-                    const trans = dragX.interpolate({
-                      inputRange: [-180, -80, 0],
-                      outputRange: [-100, 0, 80],
-                      extrapolateRight: 'clamp',
-                    });
-                    return (
-                      <RNAnimated.View style={{ width: 80, height: '100%', transform: [{ translateX: trans }] }}>
-                        <Pressable
-                          style={[styles.swipeRightAction, { backgroundColor: theme.danger, width: '100%', borderTopRightRadius: radii.md, borderBottomRightRadius: radii.md }]}
-                          onPress={() => {
-                            swipeableRefs.current.get(item.id)?.close();
-                            deleteItem(item);
-                          }}
-                        >
-                          <Ionicons name="trash-outline" size={22} color="#ffffff" />
-                          <Text style={[styles.swipeActionText, { ...typography.caption }]}>Delete</Text>
-                        </Pressable>
-                      </RNAnimated.View>
-                    );
-                  }}
-                >
-                  <View style={[styles.itemRow, { backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: radii.md, padding: spacing.md }]}>
-                    <Pressable
-                      onPress={() => {
-                        if (currentlyOpenId) {
-                          dismissSwipeables();
-                        } else {
-                          toggleItemStatus(item);
-                        }
-                      }}
-                      style={styles.checkboxContainer}
-                    >
-                      <View pointerEvents="none">
-                        <AnimatedCheckbox
-                          checked={item.status === 'completed'}
-                          isDraft={item.isDraft}
-                          theme={theme}
-                          onPress={() => {}}
-                        />
-                      </View>
-                      <Text
-                        style={[
-                          styles.itemText,
-                          {
-                            color: item.status === 'completed' || item.isDraft ? theme.textMuted : theme.text,
-                            textDecorationLine: item.status === 'completed' ? 'line-through' : 'none',
-                            fontStyle: item.isDraft ? 'italic' : 'normal',
-                            ...typography.body,
-                          },
-                        ]}
-                      >
-                        {item.title} {item.isDraft && '(pending sync)'}
-                      </Text>
-                    </Pressable>
-
-                    {/* render photo attachment icon if present */}
-                    {item.imageUrl ? (
-                      <Pressable
-                        onPress={() => {
-                          if (currentlyOpenId) {
-                            dismissSwipeables();
-                          } else {
-                            setActivePhotoUrl(item.imageUrl!);
-                          }
-                        }}
-                        style={styles.thumbnailBtn}
-                      >
-                        <Image source={{ uri: item.imageUrl }} style={[styles.thumbnail, { borderRadius: radii.sm }]} />
-                      </Pressable>
-                    ) : null}
-                  </View>
-                </Swipeable>
-              </Animated.View>
-            )}
+            renderItem={renderGroceryItem}
             ListEmptyComponent={() => (
               <View style={styles.emptyState}>
                 <Text style={{ color: theme.textMuted, ...typography.body, textAlign: 'center' }}>

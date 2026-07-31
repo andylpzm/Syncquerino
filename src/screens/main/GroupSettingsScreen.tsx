@@ -13,10 +13,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { doc, updateDoc, arrayRemove, onSnapshot, getDoc } from 'firebase/firestore';
 import { Ionicons } from '@expo/vector-icons';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { auth, db } from '../../services/firebase';
 import { useTheme } from '../../theme/ThemeContext';
 import { useActiveGroup } from '../../context/ActiveGroupContext';
 import { Button } from '../../components/Button';
+import { RootStackParamList } from '../../navigation/types';
 
 interface MemberProfile {
   uid: string;
@@ -24,7 +26,13 @@ interface MemberProfile {
   email: string;
 }
 
-export function GroupSettingsScreen() {
+type GroupSettingsNavigationProp = NativeStackNavigationProp<RootStackParamList, 'GroupSettings'>;
+
+interface GroupSettingsProps {
+  navigation: GroupSettingsNavigationProp;
+}
+
+export function GroupSettingsScreen({ navigation }: GroupSettingsProps) {
   const { theme, spacing, radii, typography } = useTheme();
   const { activeGroup, setActiveGroup } = useActiveGroup();
   const [loadingLeave, setLoadingLeave] = useState(false);
@@ -32,6 +40,7 @@ export function GroupSettingsScreen() {
   // states for loading group members
   const [membersInfo, setMembersInfo] = useState<MemberProfile[]>([]);
   const [loadingMembers, setLoadingMembers] = useState(true);
+  const [createdBy, setCreatedBy] = useState<string>('');
 
   // subscribe to members list of this group and fetch user profile documents
   useEffect(() => {
@@ -43,6 +52,7 @@ export function GroupSettingsScreen() {
         if (!snapshot.exists()) return;
         const groupData = snapshot.data();
         const memberUids: string[] = groupData.members || [];
+        setCreatedBy(groupData.createdBy || '');
 
         // fetch profiles
         const loadedProfiles: MemberProfile[] = [];
@@ -53,21 +63,21 @@ export function GroupSettingsScreen() {
               const userData = userDoc.data();
               loadedProfiles.push({
                 uid,
-                name: userData.name || 'Roommate',
-                email: userData.email || 'joined roommate',
+                name: userData.name || 'Member',
+                email: userData.email || 'circle member',
               });
             } else {
               // fallback for legacy users or users created before profile storage
               loadedProfiles.push({
                 uid,
-                name: uid === auth.currentUser?.uid ? auth.currentUser.displayName || 'Me' : 'Roommate',
+                name: uid === auth.currentUser?.uid ? auth.currentUser.displayName || 'Me' : 'Member',
                 email: uid === auth.currentUser?.uid ? auth.currentUser.email || 'active user' : 'active user',
               });
             }
           } catch (e) {
             loadedProfiles.push({
               uid,
-              name: 'Roommate',
+              name: 'Member',
               email: 'active user',
             });
           }
@@ -80,28 +90,27 @@ export function GroupSettingsScreen() {
       }
     );
 
-    return unsubscribe;
+    return () => unsubscribe();
   }, [activeGroup]);
 
-  // share invitation code via native share sheet
+  // share circle invitation code using native sharing dialog
   const handleShareCode = async () => {
     if (!activeGroup) return;
     try {
       await Share.share({
-        message: `join my household group on Syncquerino! use invitation code: ${activeGroup.code}`,
+        message: `join my circle on Syncquerino! use invitation code: ${activeGroup.code}`,
       });
     } catch (e) {
-      Alert.alert('Error', 'failed to share group invitation code.');
+      // ignore user cancel
     }
   };
 
-  // remove a specific member from this group
-  const handleRemoveMember = (memberUid: string, name: string) => {
+  // remove a specific member from this group (only allowed for group owner)
+  const handleRemoveMember = (memberUid: string, memberName: string) => {
     if (!activeGroup) return;
-
     Alert.alert(
       'Remove Member',
-      `are you sure you want to remove ${name} from the group? they will lose access instantly.`,
+      `are you sure you want to remove ${memberName} from ${activeGroup.name}?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -113,8 +122,9 @@ export function GroupSettingsScreen() {
               await updateDoc(groupDocRef, {
                 members: arrayRemove(memberUid),
               });
-            } catch (e) {
-              Alert.alert('Database Error', 'failed to remove member.');
+            } catch (e: unknown) {
+              const err = e as Error;
+              Alert.alert('Error', err.message || 'failed to remove member');
             }
           },
         },
@@ -125,9 +135,8 @@ export function GroupSettingsScreen() {
   // remove user from group document members list in firestore
   const handleLeaveGroup = async () => {
     if (!activeGroup) return;
-
     Alert.alert(
-      'Leave Group',
+      'Leave Circle',
       `are you sure you want to leave ${activeGroup.name}? you will lose access to shared lists and notes.`,
       [
         { text: 'Cancel', style: 'cancel' },
@@ -135,21 +144,17 @@ export function GroupSettingsScreen() {
           text: 'Leave',
           style: 'destructive',
           onPress: async () => {
-            setLoadingLeave(true);
             try {
-              const user = auth.currentUser;
-              if (!user) throw new Error('user not authenticated');
-
-              // update database members array
+              setLoadingLeave(true);
               const groupDocRef = doc(db, 'groups', activeGroup.id);
               await updateDoc(groupDocRef, {
-                members: arrayRemove(user.uid),
+                members: arrayRemove(auth.currentUser?.uid),
               });
-
               // clear app active group state
               await setActiveGroup(null);
-            } catch (e) {
-              Alert.alert('Database Error', 'failed to leave the group. please try again.');
+            } catch (e: unknown) {
+              const err = e as Error;
+              Alert.alert('Error', err.message || 'failed to leave circle');
             } finally {
               setLoadingLeave(false);
             }
@@ -166,7 +171,7 @@ export function GroupSettingsScreen() {
           {/* group summary */}
           <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             <Text style={[styles.cardLabel, { color: theme.textMuted, ...typography.small }]}>
-              active group name
+              ACTIVE CIRCLE NAME
             </Text>
             <Text style={[styles.groupName, { color: theme.text, ...typography.h1 }]}>
               {activeGroup?.name}
@@ -176,13 +181,13 @@ export function GroupSettingsScreen() {
           {/* share codes */}
           <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             <Text style={[styles.cardLabel, { color: theme.textMuted, ...typography.small }]}>
-              invitation code
+              INVITATION CODE
             </Text>
             <Text style={[styles.groupCode, { color: theme.primary, ...typography.display }]}>
               {activeGroup?.code}
             </Text>
             <Text style={[styles.description, { color: theme.textMuted, ...typography.small }]}>
-              share this code with your roommates or partner so they can join and sync items.
+              share this code with your friends, family, or roommates so they can join and sync items.
             </Text>
             <Button
               title="Share Invite Code"
@@ -194,7 +199,7 @@ export function GroupSettingsScreen() {
           {/* members list */}
           <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             <Text style={[styles.cardLabel, { color: theme.textMuted, ...typography.small }]}>
-              group members
+              CIRCLE MEMBERS
             </Text>
             {loadingMembers ? (
               <ActivityIndicator size="small" color={theme.primary} style={styles.memberLoader} />
@@ -202,6 +207,9 @@ export function GroupSettingsScreen() {
               <View style={styles.memberList}>
                 {membersInfo.map((member) => {
                   const isMe = member.uid === auth.currentUser?.uid;
+                  const isOwner = createdBy === auth.currentUser?.uid;
+                  const isMemberOwner = member.uid === createdBy;
+
                   return (
                     <View
                       key={member.uid}
@@ -209,13 +217,13 @@ export function GroupSettingsScreen() {
                     >
                       <View style={{ flex: 1 }}>
                         <Text style={[styles.memberName, { color: theme.text, ...typography.body }]}>
-                          {member.name} {isMe && '(me)'}
+                          {member.name} {isMe ? '(me)' : ''} {isMemberOwner ? '(Owner)' : ''}
                         </Text>
                         <Text style={[styles.memberEmail, { color: theme.textMuted, ...typography.caption }]}>
                           {member.email}
                         </Text>
                       </View>
-                      {!isMe && (
+                      {!isMe && isOwner && (
                         <Pressable
                           onPress={() => handleRemoveMember(member.uid, member.name)}
                           style={styles.removeBtn}
@@ -232,14 +240,14 @@ export function GroupSettingsScreen() {
         </View>
 
         <Button
-          title="Switch Active Group"
-          onPress={() => setActiveGroup(null)}
+          title="Switch Active Circle"
+          onPress={() => navigation.navigate('GroupSelect')}
           variant="outline"
           style={styles.switchBtn}
         />
 
         <Button
-          title="Leave Group"
+          title="Leave Circle"
           onPress={handleLeaveGroup}
           variant="danger"
           loading={loadingLeave}

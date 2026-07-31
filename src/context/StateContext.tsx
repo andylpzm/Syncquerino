@@ -1,6 +1,6 @@
 // state provider using usereducer to manage offline pending drafts and auto-sync when back online
-import React, { createContext, useContext, useReducer, useEffect } from 'react';
-import { collection, addDoc } from 'firebase/firestore';
+import React, { createContext, useContext, useReducer, useEffect, useMemo, useCallback, useRef } from 'react';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { useIsOnline } from '../hooks/useIsOnline';
 import { useActiveGroup } from './ActiveGroupContext';
 import { auth, db } from '../services/firebase';
@@ -12,6 +12,7 @@ export interface DraftItem {
   desc?: string;
   assigneeName?: string;
   dueDate?: string;
+  imageUrl?: string;
 }
 
 interface State {
@@ -31,102 +32,100 @@ const initialState: State = {
 function stateReducer(state: State, action: Action): State {
   switch (action.type) {
     case 'ADD_DRAFT':
-      return {
-        ...state,
-        drafts: [...state.drafts, action.payload],
-      };
+      return { drafts: [...state.drafts, action.payload] };
     case 'REMOVE_DRAFT':
-      return {
-        ...state,
-        drafts: state.drafts.filter((item) => item.id !== action.payload),
-      };
+      return { drafts: state.drafts.filter((d) => d.id !== action.payload) };
     case 'CLEAR_DRAFTS':
-      return {
-        ...state,
-        drafts: [],
-      };
+      return { drafts: [] };
     default:
       return state;
   }
 }
 
-interface StateContextProps {
+interface StateContextType {
   drafts: DraftItem[];
   addDraft: (item: Omit<DraftItem, 'id'>) => void;
   removeDraft: (id: string) => void;
 }
 
-const StateContext = createContext<StateContextProps | undefined>(undefined);
+const StateContext = createContext<StateContextType | undefined>(undefined);
 
 export function StateProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(stateReducer, initialState);
   const isOnline = useIsOnline();
   const { activeGroup } = useActiveGroup();
+  const isSyncingRef = useRef(false);
 
-  // add draft with a unique id
-  const addDraft = (item: Omit<DraftItem, 'id'>) => {
-    const uniqueId = Math.random().toString(36).substring(2, 9);
+  const addDraft = useCallback((item: Omit<DraftItem, 'id'>) => {
+    const uniqueId = Date.now().toString() + Math.random().toString(36).substring(2, 6);
     dispatch({
       type: 'ADD_DRAFT',
       payload: { ...item, id: uniqueId },
     });
-  };
+  }, []);
 
-  // remove a draft manually
-  const removeDraft = (id: string) => {
+  const removeDraft = useCallback((id: string) => {
     dispatch({ type: 'REMOVE_DRAFT', payload: id });
-  };
+  }, []);
 
   // sync pending drafts when internet connection is restored
   useEffect(() => {
     async function syncPendingDrafts() {
-      if (!isOnline || state.drafts.length === 0 || !activeGroup) return;
+      if (!isOnline || state.drafts.length === 0 || !activeGroup || isSyncingRef.current) return;
 
-      const user = auth.currentUser;
-      const creatorName = user?.displayName || user?.email || 'roommate';
+      isSyncingRef.current = true;
+      try {
+        const user = auth.currentUser;
+        const creatorName = user?.displayName || user?.email || 'member';
 
-      // loop through drafts and sync to cloud firestore mapping properties by category
-      for (const draft of state.drafts) {
-        try {
-          const docData: any = {
-            groupId: activeGroup.id,
-            category: draft.category,
-            title: draft.title,
-            createdAt: new Date(),
-          };
+        const draftsToSync = [...state.drafts];
+        for (const draft of draftsToSync) {
+          try {
+            const docData: any = {
+              groupId: activeGroup.id,
+              category: draft.category,
+              title: draft.title,
+              createdAt: serverTimestamp(),
+            };
 
-          if (draft.category === 'grocery') {
-            docData.status = 'active';
-            docData.imageUrl = draft.desc || '';
-          } else if (draft.category === 'note') {
-            docData.desc = draft.desc || '';
-            docData.creatorName = draft.assigneeName || creatorName;
-            docData.imageUrl = draft.dueDate || '';
-            docData.createdAtText = new Date().toLocaleDateString(undefined, {
-              month: 'short',
-              day: 'numeric',
-            });
-          } else if (draft.category === 'reminder') {
-            docData.status = 'active';
-            docData.assigneeName = draft.assigneeName || 'anyone';
-            docData.dueDate = draft.dueDate || 'select date';
+            if (draft.category === 'grocery') {
+              docData.status = 'active';
+              docData.imageUrl = draft.imageUrl || '';
+            } else if (draft.category === 'note') {
+              docData.desc = draft.desc || '';
+              docData.creatorName = draft.assigneeName || creatorName;
+              docData.imageUrl = draft.imageUrl || '';
+              docData.createdAtText = new Date().toLocaleDateString(undefined, {
+                month: 'short',
+                day: 'numeric',
+              });
+            } else if (draft.category === 'reminder') {
+              docData.status = 'active';
+              docData.assigneeName = draft.assigneeName || 'Anyone';
+              docData.dueDate = draft.dueDate || '';
+            }
+
+            await addDoc(collection(db, 'items'), docData);
+            dispatch({ type: 'REMOVE_DRAFT', payload: draft.id });
+          } catch (e) {
+            // retry on next online transition
           }
-
-          await addDoc(collection(db, 'items'), docData);
-        } catch (e) {
-          // fail silently and retry on next online transition
         }
+      } finally {
+        isSyncingRef.current = false;
       }
-
-      // clear queue after synchronization
-      dispatch({ type: 'CLEAR_DRAFTS' });
     }
 
     syncPendingDrafts();
   }, [isOnline, activeGroup, state.drafts]);
 
+  const value = useMemo(
+    () => ({ drafts: state.drafts, addDraft, removeDraft }),
+    [state.drafts, addDraft, removeDraft]
+  );
+
   return (
-    <StateContext.Provider value={{ drafts: state.drafts, addDraft, removeDraft }}>
+    <StateContext.Provider value={value}>
       {children}
     </StateContext.Provider>
   );

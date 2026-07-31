@@ -1,9 +1,7 @@
-// firebase sdk setup including auth, persistent storage, and real-time database initialization
+// Firebase SDK setup for Auth, Firestore, and Storage
 import { getApps, initializeApp, getApp } from 'firebase/app';
 import { getFirestore, Firestore } from 'firebase/firestore';
-// @ts-expect-error: getreactnativepersistence is not typed in standard web typings
-import { initializeAuth, getReactNativePersistence, getAuth, Auth } from 'firebase/auth';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getAuth, Auth } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
 
 const firebaseConfig = {
@@ -15,27 +13,12 @@ const firebaseConfig = {
   appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
 };
 
-// get existing app or boot up a new one
-let app;
-if (getApps().length > 0) {
-  app = getApp();
-} else {
-  app = initializeApp(firebaseConfig);
-}
+// get existing app or initialize a new instance
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
-// prevent duplicate auth initialization error during hot reloading
-let auth: Auth;
-try {
-  auth = initializeAuth(app, {
-    persistence: getReactNativePersistence(AsyncStorage),
-  });
-} catch (e) {
-  auth = getAuth(app);
-}
-
-// standard firestore database instance matching the slides example
+// Firebase services
+const auth: Auth = getAuth(app);
 const db: Firestore = getFirestore(app);
-
 const storage = getStorage(app);
 
-export { auth, db, storage };
+export { app, auth, db, storage };

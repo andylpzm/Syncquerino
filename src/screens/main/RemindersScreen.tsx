@@ -1,10 +1,8 @@
-// reminders screen to coordinate household chores and deadlines in real time with react-native-calendars selector
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  FlatList,
   Pressable,
   ActivityIndicator,
   Alert,
@@ -19,16 +17,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { collection, query, where, onSnapshot, addDoc, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { Ionicons } from '@expo/vector-icons';
 import { Calendar } from 'react-native-calendars';
 import Animated, { FadeInDown, FadeOutDown, Layout, LinearTransition } from 'react-native-reanimated';
-import { Swipeable } from 'react-native-gesture-handler';
+import { Swipeable, FlatList } from 'react-native-gesture-handler';
+import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../../theme/ThemeContext';
 import { useActiveGroup } from '../../context/ActiveGroupContext';
 import { useAppState } from '../../context/StateContext';
 import { useIsOnline } from '../../hooks/useIsOnline';
-import { db } from '../../services/firebase';
+import { auth, db } from '../../services/firebase';
 import { Input } from '../../components/Input';
 import { Button } from '../../components/Button';
 import { AnimatedCheckbox } from '../../components/AnimatedCheckbox';
@@ -37,9 +36,9 @@ import * as Haptics from 'expo-haptics';
 
 // validation schema for adding chores
 const reminderSchema = z.object({
-  title: z.string().min(1, 'what needs to get done? chore name is required'),
-  assigneeName: z.string().optional(),
-  dueDate: z.string().optional(),
+  title: z.string().min(1, 'what needs to get done? chore name is required').max(100, 'chore name too long'),
+  assigneeName: z.string().max(50, 'assignee name too long').optional(),
+  dueDate: z.string().max(20, 'date string too long').optional(),
 });
 
 type ReminderFormData = z.infer<typeof reminderSchema>;
@@ -53,6 +52,15 @@ interface ReminderItem {
   isDraft?: boolean;
 }
 
+function getInitials(name: string): string {
+  if (!name || name === 'Anyone') return '👥';
+  const parts = name.trim().split(' ');
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return name.substring(0, 2).toUpperCase();
+}
+
 export function RemindersScreen() {
   const { theme, spacing, radii, typography } = useTheme();
   const { activeGroup } = useActiveGroup();
@@ -63,6 +71,10 @@ export function RemindersScreen() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [currentlyOpenId, setCurrentlyOpenId] = useState<string | null>(null);
   const swipeableRefs = React.useRef<Map<string, any>>(new Map());
+
+  // group members list for assignee selection
+  const [groupMembers, setGroupMembers] = useState<string[]>(['Anyone']);
+  const [memberAvatars, setMemberAvatars] = useState<Record<string, string>>({});
 
   const dismissSwipeables = () => {
     if (currentlyOpenId) {
@@ -81,6 +93,10 @@ export function RemindersScreen() {
   const [editDueDate, setEditDueDate] = useState('');
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [isEditingCalendarVisible, setIsEditingCalendarVisible] = useState(false);
+  const [isEditingAssigneeVisible, setIsEditingAssigneeVisible] = useState(false);
+
+  // modal state for add form assignee selection
+  const [isAddAssigneeModalVisible, setIsAddAssigneeModalVisible] = useState(false);
 
   const {
     control,
@@ -91,10 +107,57 @@ export function RemindersScreen() {
     formState: { errors, isSubmitting },
   } = useForm<ReminderFormData>({
     resolver: zodResolver(reminderSchema),
-    defaultValues: { title: '', assigneeName: '', dueDate: '' },
+    defaultValues: { title: '', assigneeName: 'Anyone', dueDate: '' },
   });
 
   const selectedDueDate = watch('dueDate');
+  const selectedAssignee = watch('assigneeName');
+
+  // reset transient open forms and modals whenever the screen loses focus (e.g. user switches tabs)
+  useFocusEffect(
+    React.useCallback(() => {
+      return () => {
+        setShowAddForm(false);
+        closeEditModal();
+        setCalendarVisible(false);
+        setIsAddAssigneeModalVisible(false);
+        reset({ title: '', assigneeName: 'Anyone', dueDate: '' });
+      };
+    }, [reset])
+  );
+
+  // subscribe to active group document and fetch member profile names
+  useEffect(() => {
+    if (!activeGroup) return;
+
+    const unsubscribe = onSnapshot(
+      doc(db, 'groups', activeGroup.id),
+      async (snapshot) => {
+        if (!snapshot.exists()) return;
+        const groupData = snapshot.data();
+        const memberUids: string[] = groupData.members || [];
+
+        const loadedNames: string[] = ['Anyone'];
+        for (const uid of memberUids) {
+          try {
+            const userDoc = await getDoc(doc(db, 'users', uid));
+            if (userDoc.exists() && userDoc.data().name) {
+              loadedNames.push(userDoc.data().name);
+            } else if (uid === auth.currentUser?.uid && auth.currentUser?.displayName) {
+              loadedNames.push(auth.currentUser.displayName);
+            } else {
+              loadedNames.push('Roommate');
+            }
+          } catch (e) {
+            loadedNames.push('Roommate');
+          }
+        }
+        setGroupMembers(Array.from(new Set(loadedNames)));
+      }
+    );
+
+    return unsubscribe;
+  }, [activeGroup]);
 
   // subscribe to reminders collection in firestore
   useEffect(() => {
@@ -110,20 +173,33 @@ export function RemindersScreen() {
       q,
       (snapshot) => {
         const loadedReminders: ReminderItem[] = [];
-        snapshot.forEach((doc) => {
-          const data = doc.data();
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
           loadedReminders.push({
-            id: doc.id,
+            id: docSnap.id,
             title: data.title,
             status: data.status || 'active',
             assigneeName: data.assigneeName,
             dueDate: data.dueDate,
           });
         });
+        // sort chores: active first, then earliest due dates first, fallback to title
+        loadedReminders.sort((a, b) => {
+          if (a.status !== b.status) {
+            return a.status === 'active' ? -1 : 1;
+          }
+          const dateA = a.dueDate && a.dueDate.trim() ? a.dueDate.trim() : '9999-99-99';
+          const dateB = b.dueDate && b.dueDate.trim() ? b.dueDate.trim() : '9999-99-99';
+          if (dateA !== dateB) {
+            return dateA.localeCompare(dateB);
+          }
+          return a.title.localeCompare(b.title);
+        });
+
         setItems(loadedReminders);
         setLoading(false);
       },
-      (error) => {
+      () => {
         setLoading(false);
       }
     );
@@ -168,16 +244,18 @@ export function RemindersScreen() {
 
   // initialize edit modal state
   const startEditChore = (item: ReminderItem) => {
+    dismissSwipeables();
     if (!isOnline) {
       Alert.alert('Offline Mode', 'editing existing chores is disabled while offline.');
       return;
     }
     setEditingReminderId(item.id);
     setEditTitle(item.title);
-    setEditAssignee(item.assigneeName || 'anyone');
-    setEditDueDate(item.dueDate || 'select date');
+    setEditAssignee(item.assigneeName || 'Anyone');
+    setEditDueDate(item.dueDate || '');
     setIsEditModalVisible(true);
     setIsEditingCalendarVisible(false);
+    setIsEditingAssigneeVisible(false);
   };
 
   // save chore edits to database
@@ -196,8 +274,8 @@ export function RemindersScreen() {
     try {
       await updateDoc(doc(db, 'items', editingReminderId), {
         title: editTitle.trim(),
-        assigneeName: editAssignee.trim() || 'anyone',
-        dueDate: editDueDate.trim() || 'select date',
+        assigneeName: editAssignee.trim() || 'Anyone',
+        dueDate: editDueDate.trim() || '',
       });
       closeEditModal();
     } catch (e: any) {
@@ -214,6 +292,8 @@ export function RemindersScreen() {
     setEditAssignee('');
     setEditDueDate('');
     setIsEditingCalendarVisible(false);
+    setIsEditingAssigneeVisible(false);
+    dismissSwipeables();
   };
 
   // toggle chore completion status
@@ -259,7 +339,138 @@ export function RemindersScreen() {
       isDraft: true,
     }));
 
-  const combinedData = [...localDrafts, ...items];
+  const combinedData = [...localDrafts, ...items].sort((a, b) => {
+    if (a.status !== b.status) {
+      return a.status === 'active' ? -1 : 1;
+    }
+    const dateA = a.dueDate && a.dueDate.trim() && a.dueDate !== 'select date' ? a.dueDate.trim() : '9999-99-99';
+    const dateB = b.dueDate && b.dueDate.trim() && b.dueDate !== 'select date' ? b.dueDate.trim() : '9999-99-99';
+    if (dateA !== dateB) {
+      return dateA.localeCompare(dateB);
+    }
+    return a.title.localeCompare(b.title);
+  });
+
+  const renderChoreItem = useCallback(
+    ({ item }: { item: ReminderItem }) => (
+      <Animated.View
+        entering={FadeInDown.duration(300)}
+        exiting={FadeOutDown.duration(300)}
+        layout={Layout.springify().mass(0.8)}
+      >
+        <Swipeable
+          ref={(ref) => {
+            if (ref) {
+              swipeableRefs.current.set(item.id, ref);
+            } else {
+              swipeableRefs.current.delete(item.id);
+            }
+          }}
+          onSwipeableWillOpen={() => {
+            swipeableRefs.current.forEach((sRef, sId) => {
+              if (sId !== item.id) {
+                sRef.close();
+              }
+            });
+            setCurrentlyOpenId(item.id);
+          }}
+          onSwipeableClose={() => {
+            if (currentlyOpenId === item.id) {
+              setCurrentlyOpenId(null);
+            }
+          }}
+          containerStyle={{ borderRadius: radii.md, overflow: 'hidden' }}
+          renderRightActions={(progress, dragX) => {
+            const panelWidth = item.isDraft ? 80 : 160;
+            const trans = dragX.interpolate({
+              inputRange: [-panelWidth - 100, -panelWidth, 0],
+              outputRange: [-100, 0, panelWidth],
+              extrapolateRight: 'clamp',
+            });
+            return (
+              <RNAnimated.View style={{ flexDirection: 'row', width: panelWidth, height: '100%', transform: [{ translateX: trans }] }}>
+                {!item.isDraft && (
+                  <Pressable
+                    style={[styles.swipeRightAction, { backgroundColor: theme.primary, width: 80, height: '100%' }]}
+                    onPress={() => {
+                      swipeableRefs.current.get(item.id)?.close();
+                      startEditChore(item);
+                    }}
+                  >
+                    <Ionicons name="create-outline" size={22} color="#ffffff" />
+                    <Text style={[styles.swipeActionText, { ...typography.caption }]}>Edit</Text>
+                  </Pressable>
+                )}
+                <Pressable
+                  style={[styles.swipeRightAction, { backgroundColor: theme.danger, width: 80, height: '100%', borderTopRightRadius: radii.md, borderBottomRightRadius: radii.md }]}
+                  onPress={() => {
+                    swipeableRefs.current.get(item.id)?.close();
+                    deleteChore(item);
+                  }}
+                >
+                  <Ionicons name="trash-outline" size={22} color="#ffffff" />
+                  <Text style={[styles.swipeActionText, { ...typography.caption }]}>Delete</Text>
+                </Pressable>
+              </RNAnimated.View>
+            );
+          }}
+        >
+          <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: radii.md, padding: spacing.md }]}>
+            <View style={styles.choreHeader}>
+              <Pressable
+                onPress={() => {
+                  if (currentlyOpenId) {
+                    dismissSwipeables();
+                  } else {
+                    toggleChoreStatus(item);
+                  }
+                }}
+                style={styles.checkboxContainer}
+              >
+                <View pointerEvents="none">
+                  <AnimatedCheckbox
+                    checked={item.status === 'completed'}
+                    isDraft={item.isDraft}
+                    onPress={() => {}}
+                  />
+                </View>
+                <Text
+                  style={[
+                    styles.choreTitle,
+                    {
+                      color: item.status === 'completed' || item.isDraft ? theme.textMuted : theme.text,
+                      textDecorationLine: item.status === 'completed' ? 'line-through' : 'none',
+                      fontStyle: item.isDraft ? 'italic' : 'normal',
+                      ...typography.body,
+                    },
+                  ]}
+                >
+                  {item.title}
+                </Text>
+                {item.isDraft && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: spacing.xs }}>
+                    <Ionicons name="time-outline" size={14} color="#f59e0b" />
+                    <Text style={{ color: theme.textMuted, fontStyle: 'italic', marginLeft: 2, ...typography.caption }}>
+                      (sync pending)
+                    </Text>
+                  </View>
+                )}
+              </Pressable>
+            </View>
+            <View style={styles.choreFooter}>
+              <Text style={[styles.metaText, { color: theme.textMuted, ...typography.small }]}>
+                Assigned to: {item.assigneeName}
+              </Text>
+              <Text style={[styles.metaText, { color: theme.textMuted, ...typography.small }]}>
+                Target Date: {formatEuropeanDate(item.dueDate)}
+              </Text>
+            </View>
+          </View>
+        </Swipeable>
+      </Animated.View>
+    ),
+    [currentlyOpenId, theme, radii, spacing, typography, startEditChore, deleteChore, toggleChoreStatus, dismissSwipeables]
+  );
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
@@ -288,7 +499,7 @@ export function RemindersScreen() {
             style={[styles.formContainer, { backgroundColor: theme.surface, borderColor: theme.border, borderRadius: radii.lg, padding: spacing.md }]}
           >
             <Text style={[styles.formTitle, { color: theme.text, ...typography.h2 }]}>
-              Assign a House Chore
+              Assign a Task
             </Text>
             <Controller
               control={control}
@@ -304,19 +515,36 @@ export function RemindersScreen() {
                 />
               )}
             />
-            <Controller
-              control={control}
-              name="assigneeName"
-              render={({ field: { onChange, onBlur, value } }) => (
-                <Input
-                  placeholder="Assigned to"
-                  onBlur={onBlur}
-                  onChangeText={onChange}
-                  value={value}
-                  autoCorrect={false}
-                />
-              )}
-            />
+            {/* assignee selector */}
+            <View style={{ marginBottom: 12 }}>
+              <Text style={[styles.fieldLabel, { color: theme.textMuted, ...typography.caption, marginBottom: 4 }]}>
+                assigned member:
+              </Text>
+              <Pressable
+                onPress={() => setIsAddAssigneeModalVisible(true)}
+                style={({ pressed }) => [
+                  styles.assigneeSelectorRow,
+                  {
+                    backgroundColor: theme.background,
+                    borderColor: theme.border,
+                    borderRadius: radii.md,
+                    opacity: pressed ? 0.75 : 1.0,
+                  },
+                ]}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <View style={[styles.avatarCircle, { backgroundColor: theme.primary }]}>
+                    <Text style={[styles.avatarInitials, { color: theme.surface }]}>
+                      {getInitials(selectedAssignee || 'Anyone')}
+                    </Text>
+                  </View>
+                  <Text style={[styles.assigneeRowText, { color: theme.text, ...typography.body }]}>
+                    {selectedAssignee || 'Anyone'}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-down" size={18} color={theme.textMuted} />
+              </Pressable>
+            </View>
             <Controller
               control={control}
               name="dueDate"
@@ -371,117 +599,7 @@ export function RemindersScreen() {
             data={combinedData}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.listContainer}
-            renderItem={({ item }) => (
-              <Animated.View
-                entering={FadeInDown.duration(300)}
-                exiting={FadeOutDown.duration(300)}
-                layout={Layout.springify().mass(0.8)}
-              >
-                <Swipeable
-                  ref={(ref) => {
-                    if (ref) {
-                      swipeableRefs.current.set(item.id, ref);
-                    } else {
-                      swipeableRefs.current.delete(item.id);
-                    }
-                  }}
-                  onSwipeableWillOpen={() => {
-                    // Close any other open swipeables
-                    swipeableRefs.current.forEach((sRef, sId) => {
-                      if (sId !== item.id) {
-                        sRef.close();
-                      }
-                    });
-                    setCurrentlyOpenId(item.id);
-                  }}
-                  onSwipeableClose={() => {
-                    if (currentlyOpenId === item.id) {
-                      setCurrentlyOpenId(null);
-                    }
-                  }}
-                  containerStyle={{ borderRadius: radii.md, overflow: 'hidden' }}
-                  renderRightActions={(progress, dragX) => {
-                    const panelWidth = item.isDraft ? 80 : 160;
-                    const trans = dragX.interpolate({
-                      inputRange: [-panelWidth - 100, -panelWidth, 0],
-                      outputRange: [-100, 0, panelWidth],
-                      extrapolateRight: 'clamp',
-                    });
-                    return (
-                      <RNAnimated.View style={{ flexDirection: 'row', width: panelWidth, height: '100%', transform: [{ translateX: trans }] }}>
-                        {!item.isDraft && (
-                          <Pressable
-                            style={[styles.swipeRightAction, { backgroundColor: theme.primary, width: 80, height: '100%' }]}
-                            onPress={() => {
-                              swipeableRefs.current.get(item.id)?.close();
-                              startEditChore(item);
-                            }}
-                          >
-                            <Ionicons name="create-outline" size={22} color="#ffffff" />
-                            <Text style={[styles.swipeActionText, { ...typography.caption }]}>Edit</Text>
-                          </Pressable>
-                        )}
-                        <Pressable
-                          style={[styles.swipeRightAction, { backgroundColor: theme.danger, width: 80, height: '100%', borderTopRightRadius: radii.md, borderBottomRightRadius: radii.md }]}
-                          onPress={() => {
-                            swipeableRefs.current.get(item.id)?.close();
-                            deleteChore(item);
-                          }}
-                        >
-                          <Ionicons name="trash-outline" size={22} color="#ffffff" />
-                          <Text style={[styles.swipeActionText, { ...typography.caption }]}>Delete</Text>
-                        </Pressable>
-                      </RNAnimated.View>
-                    );
-                  }}
-                >
-                  <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border, borderWidth: 1, borderRadius: radii.md, padding: spacing.md }]}>
-                    <View style={styles.choreHeader}>
-                      <Pressable
-                        onPress={() => {
-                          if (currentlyOpenId) {
-                            dismissSwipeables();
-                          } else {
-                            toggleChoreStatus(item);
-                          }
-                        }}
-                        style={styles.checkboxContainer}
-                      >
-                        <View pointerEvents="none">
-                          <AnimatedCheckbox
-                            checked={item.status === 'completed'}
-                            isDraft={item.isDraft}
-                            theme={theme}
-                            onPress={() => {}}
-                          />
-                        </View>
-                        <Text
-                          style={[
-                            styles.choreTitle,
-                            {
-                              color: item.status === 'completed' || item.isDraft ? theme.textMuted : theme.text,
-                              textDecorationLine: item.status === 'completed' ? 'line-through' : 'none',
-                              fontStyle: item.isDraft ? 'italic' : 'normal',
-                              ...typography.body,
-                            },
-                          ]}
-                        >
-                          {item.title} {item.isDraft && '(sync pending)'}
-                        </Text>
-                      </Pressable>
-                    </View>
-                    <View style={styles.choreFooter}>
-                      <Text style={[styles.metaText, { color: theme.textMuted, ...typography.small }]}>
-                        Assigned to: {item.assigneeName}
-                      </Text>
-                      <Text style={[styles.metaText, { color: theme.textMuted, ...typography.small }]}>
-                        Target Date: {formatEuropeanDate(item.dueDate)}
-                      </Text>
-                    </View>
-                  </View>
-                </Swipeable>
-              </Animated.View>
-            )}
+            renderItem={renderChoreItem}
             ListEmptyComponent={() => (
               <View style={styles.emptyState}>
                 <Text style={{ color: theme.textMuted, ...typography.body, textAlign: 'center' }}>
@@ -493,7 +611,7 @@ export function RemindersScreen() {
         )}
       </Animated.View>
 
-      {/* chore editor popup modal (industry standard centered overlay) */}
+      {/* edit task modal */}
       <Modal visible={isEditModalVisible} transparent animationType="slide">
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -542,6 +660,64 @@ export function RemindersScreen() {
                   style={styles.closeModalBtn}
                 />
               </View>
+            ) : isEditingAssigneeVisible ? (
+              // inline roommate assignee picker inside editing modal (bypasses modal stacking issues)
+              <View>
+                <View style={styles.editPopupHeader}>
+                  <Text style={{ color: theme.text, ...typography.h2, fontWeight: '700' }}>Select Assignee</Text>
+                  <Pressable onPress={() => setIsEditingAssigneeVisible(false)}>
+                    <Ionicons name="close" size={24} color={theme.textMuted} />
+                  </Pressable>
+                </View>
+
+                <ScrollView contentContainerStyle={{ gap: 10, maxHeight: 300 }}>
+                  {groupMembers.map((member) => {
+                    const isSelected = (editAssignee || 'Anyone') === member;
+                    const initials = getInitials(member);
+
+                    return (
+                      <Pressable
+                        key={member}
+                        onPress={() => {
+                          setEditAssignee(member);
+                          setIsEditingAssigneeVisible(false);
+                        }}
+                        style={({ pressed }) => [
+                          styles.sheetMemberRow,
+                          {
+                            backgroundColor: isSelected ? theme.primary + '15' : theme.background,
+                            borderColor: isSelected ? theme.primary : theme.border,
+                            borderWidth: isSelected ? 2 : 1,
+                            borderRadius: radii.md,
+                            opacity: pressed ? 0.75 : 1.0,
+                          },
+                        ]}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                          <View style={[styles.avatarCircle, { backgroundColor: isSelected ? theme.primary : theme.border, width: 36, height: 36, borderRadius: 18 }]}>
+                            <Text style={[styles.avatarInitials, { color: isSelected ? theme.surface : theme.text, fontSize: 13 }]}>
+                              {initials}
+                            </Text>
+                          </View>
+                          <Text style={[styles.sheetMemberName, { color: theme.text, ...typography.body, fontWeight: isSelected ? '700' : '500' }]}>
+                            {member}
+                          </Text>
+                        </View>
+                        {isSelected && (
+                          <Ionicons name="checkmark-circle" size={20} color={theme.primary} />
+                        )}
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+
+                <Button
+                  title="Back to Form"
+                  onPress={() => setIsEditingAssigneeVisible(false)}
+                  variant="outline"
+                  style={{ width: '100%', marginTop: 12 }}
+                />
+              </View>
             ) : (
               // standard edit inputs view
               <View>
@@ -564,15 +740,34 @@ export function RemindersScreen() {
                     />
                   </View>
 
-                  <View>
-                    <Text style={[styles.fieldLabel, { color: theme.textMuted, ...typography.small }]}>Assigned To</Text>
-                    <TextInput
-                      style={[styles.inlineInput, { color: theme.text, borderColor: theme.border, borderRadius: radii.sm, padding: spacing.sm, ...typography.body }]}
-                      placeholder="Sarah, John..."
-                      placeholderTextColor={theme.textMuted}
-                      value={editAssignee}
-                      onChangeText={setEditAssignee}
-                    />
+                  <View style={{ marginVertical: 4 }}>
+                    <Text style={[styles.fieldLabel, { color: theme.textMuted, ...typography.small, marginBottom: 4 }]}>
+                      Assigned Roommate
+                    </Text>
+                    <Pressable
+                      onPress={() => setIsEditingAssigneeVisible(true)}
+                      style={({ pressed }) => [
+                        styles.assigneeSelectorRow,
+                        {
+                          backgroundColor: theme.background,
+                          borderColor: theme.border,
+                          borderRadius: radii.md,
+                          opacity: pressed ? 0.75 : 1.0,
+                        },
+                      ]}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <View style={[styles.avatarCircle, { backgroundColor: theme.primary }]}>
+                          <Text style={[styles.avatarInitials, { color: theme.surface }]}>
+                            {getInitials(editAssignee || 'Anyone')}
+                          </Text>
+                        </View>
+                        <Text style={[styles.assigneeRowText, { color: theme.text, ...typography.body }]}>
+                          {editAssignee || 'Anyone'}
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-down" size={18} color={theme.textMuted} />
+                    </Pressable>
                   </View>
 
                   <View>
@@ -597,6 +792,77 @@ export function RemindersScreen() {
                 </ScrollView>
               </View>
             )}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Assignee Picker Bottom Sheet Modal (For Add Chore Form) */}
+      <Modal
+        visible={isAddAssigneeModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setIsAddAssigneeModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <Pressable style={styles.modalCloseArea} onPress={() => setIsAddAssigneeModalVisible(false)} />
+          <View style={[styles.editPopup, { backgroundColor: theme.surface, borderRadius: radii.lg, padding: spacing.lg }]}>
+            <View style={styles.editPopupHeader}>
+              <Text style={{ color: theme.text, ...typography.h2, fontWeight: '700' }}>Select Assignee</Text>
+              <Pressable onPress={() => setIsAddAssigneeModalVisible(false)}>
+                <Ionicons name="close" size={24} color={theme.textMuted} />
+              </Pressable>
+            </View>
+
+            <ScrollView contentContainerStyle={{ gap: 10, maxHeight: 300 }}>
+              {groupMembers.map((member) => {
+                const isSelected = (selectedAssignee || 'Anyone') === member;
+                const initials = getInitials(member);
+
+                return (
+                  <Pressable
+                    key={member}
+                    onPress={() => {
+                      setValue('assigneeName', member);
+                      setIsAddAssigneeModalVisible(false);
+                    }}
+                    style={({ pressed }) => [
+                      styles.sheetMemberRow,
+                      {
+                        backgroundColor: isSelected ? theme.primary + '15' : theme.background,
+                        borderColor: isSelected ? theme.primary : theme.border,
+                        borderWidth: isSelected ? 2 : 1,
+                        borderRadius: radii.md,
+                        opacity: pressed ? 0.75 : 1.0,
+                      },
+                    ]}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      <View style={[styles.avatarCircle, { backgroundColor: isSelected ? theme.primary : theme.border, width: 36, height: 36, borderRadius: 18 }]}>
+                        <Text style={[styles.avatarInitials, { color: isSelected ? theme.surface : theme.text, fontSize: 13 }]}>
+                          {initials}
+                        </Text>
+                      </View>
+                      <Text style={[styles.sheetMemberName, { color: theme.text, ...typography.body, fontWeight: isSelected ? '700' : '500' }]}>
+                        {member}
+                      </Text>
+                    </View>
+                    {isSelected && (
+                      <Ionicons name="checkmark-circle" size={20} color={theme.primary} />
+                    )}
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <Button
+              title="Close"
+              onPress={() => setIsAddAssigneeModalVisible(false)}
+              variant="outline"
+              style={{ width: '100%', marginTop: 12 }}
+            />
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -772,8 +1038,10 @@ const styles = StyleSheet.create({
   },
   inlineInput: {
     borderWidth: 1,
-    backgroundColor: '#f9fafb',
-    marginTop: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 16,
+    marginTop: 6,
   },
   editPopup: {
     width: '90%',
@@ -792,5 +1060,51 @@ const styles = StyleSheet.create({
   },
   fieldLabel: {
     fontWeight: '600',
+    fontSize: 14,
+  },
+  avatarMemberCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 24,
+  },
+  avatarCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarInitials: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  avatarMemberName: {
+    fontSize: 14,
+  },
+  assigneeSelectorRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderWidth: 1,
+    marginTop: 6,
+  },
+  assigneeRowText: {
+    fontWeight: '600',
+    fontSize: 15,
+  },
+  sheetMemberRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 14,
+  },
+  sheetMemberName: {
+    fontWeight: '600',
+    fontSize: 15,
   },
 });
