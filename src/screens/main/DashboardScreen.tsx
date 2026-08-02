@@ -335,6 +335,7 @@ export function DashboardScreen({ navigation }: DashboardScreenProps) {
         visible={settingsModalVisible}
         onClose={() => setSettingsModalVisible(false)}
         onToast={showToast}
+        onOpenGroupSettings={() => navigation.navigate('GroupSettings')}
       />
     </SafeAreaView>
   );

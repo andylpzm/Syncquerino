@@ -12,7 +12,7 @@ import {
   Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { collection, query, where, getDocs, addDoc, updateDoc, arrayUnion, doc, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, addDoc, updateDoc, arrayUnion, doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { signOut } from 'firebase/auth';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { auth, db } from '../../services/firebase';
@@ -26,6 +26,16 @@ interface GroupData {
   id: string;
   name: string;
   code: string;
+}
+
+// build a 6-character invite code, leaving out glyphs that are easy to misread
+function generateInviteCode(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = '';
+  for (let i = 0; i < 6; i++) {
+    out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return out;
 }
 
 type GroupSelectNavigationProp = NativeStackNavigationProp<RootStackParamList, 'GroupSelect'>;
@@ -100,29 +110,40 @@ export function GroupSelectScreen({ navigation }: GroupSelectProps) {
       const user = auth.currentUser;
       if (!user) throw new Error('user not authenticated');
 
-      // generate a clean random 6-character uppercase room code
-      const generatedCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-
-      // write group details to firestore
-      const groupData = {
+      // create the circle first: the groupCodes rule verifies createdBy on this document
+      const docRef = await addDoc(collection(db, 'groups'), {
         name: createName.trim(),
-        code: generatedCode,
+        code: '',
         createdBy: user.uid,
         members: [user.uid],
         createdAt: new Date(),
-      };
+      });
 
-      const docRef = await addDoc(collection(db, 'groups'), groupData);
+      // claim a unique invite code. groupCodes denies updates, so writing a code
+      // that is already taken throws and we simply try another one.
+      let claimedCode = '';
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const candidate = generateInviteCode();
+        try {
+          await setDoc(doc(db, 'groupCodes', candidate), { groupId: docRef.id });
+          claimedCode = candidate;
+          break;
+        } catch (codeError) {
+          // code already in use, retry with a fresh one
+        }
+      }
+      if (!claimedCode) throw new Error('could not allocate an invite code');
+
+      // publish the claimed code onto the circle document
+      await updateDoc(doc(db, 'groups', docRef.id), { code: claimedCode });
 
       // set active group in app state
       await setActiveGroup({
         id: docRef.id,
-        name: groupData.name,
-        code: groupData.code,
+        name: createName.trim(),
+        code: claimedCode,
       });
-      if (navigation?.canGoBack()) {
-        navigation.navigate('MainTabs');
-      }
+      navigation?.navigate('MainTabs');
     } catch (e: any) {
       Alert.alert('Database Error', 'failed to create group. please try again.');
     } finally {
@@ -143,34 +164,32 @@ export function GroupSelectScreen({ navigation }: GroupSelectProps) {
       const user = auth.currentUser;
       if (!user) throw new Error('user not authenticated');
 
-      // query groups matching code
-      const q = query(collection(db, 'groups'), where('code', '==', cleanedCode));
-      const querySnapshot = await getDocs(q);
+      // single-document lookup, so this is never rejected the way a query would be
+      const codeSnap = await getDoc(doc(db, 'groupCodes', cleanedCode));
 
-      if (querySnapshot.empty) {
+      if (!codeSnap.exists()) {
         Alert.alert('Not Found', 'no group matches this invitation code.');
-        setLoadingJoin(false);
         return;
       }
 
-      // get matching document details
-      const groupDoc = querySnapshot.docs[0];
-      const groupData = groupDoc.data();
+      const groupId = codeSnap.data().groupId as string;
 
-      // update members array in database
-      await updateDoc(doc(db, 'groups', groupDoc.id), {
+      // self-join: the rules allow appending only our own uid to members
+      await updateDoc(doc(db, 'groups', groupId), {
         members: arrayUnion(user.uid),
       });
 
+      // now that we are a member, the circle document itself is readable
+      const groupSnap = await getDoc(doc(db, 'groups', groupId));
+      const groupName = groupSnap.exists() ? (groupSnap.data().name as string) : 'circle';
+
       // save active group details in local context
       await setActiveGroup({
-        id: groupDoc.id,
-        name: groupData.name,
-        code: groupData.code,
+        id: groupId,
+        name: groupName,
+        code: cleanedCode,
       });
-      if (navigation?.canGoBack()) {
-        navigation.navigate('MainTabs');
-      }
+      navigation?.navigate('MainTabs');
     } catch (e) {
       Alert.alert('Database Error', 'failed to join group. please check connection.');
     } finally {
@@ -181,9 +200,7 @@ export function GroupSelectScreen({ navigation }: GroupSelectProps) {
   // select an existing group and navigate back to main tabs
   const handleSelectGroup = async (group: GroupData) => {
     await setActiveGroup(group);
-    if (navigation?.canGoBack()) {
-      navigation.navigate('MainTabs');
-    }
+    navigation?.navigate('MainTabs');
   };
 
   return (

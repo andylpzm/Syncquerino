@@ -1,8 +1,7 @@
-// Firebase SDK setup for Auth, Firestore, and Storage
+// Firebase SDK setup for Auth and Firestore
 import { getApps, initializeApp, getApp } from 'firebase/app';
 import { getFirestore, Firestore } from 'firebase/firestore';
 import { getAuth, Auth } from 'firebase/auth';
-import { getStorage } from 'firebase/storage';
 
 const firebaseConfig = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
@@ -19,6 +18,5 @@ const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 // Firebase services
 const auth: Auth = getAuth(app);
 const db: Firestore = getFirestore(app);
-const storage = getStorage(app);
 
-export { app, auth, db, storage };
+export { app, auth, db };

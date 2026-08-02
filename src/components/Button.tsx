@@ -6,7 +6,7 @@ import { useTheme } from '../theme/ThemeContext';
 interface ButtonProps {
   title: string;
   onPress: () => void;
-  variant?: 'primary' | 'secondary' | 'danger' | 'outline';
+  variant?: 'primary' | 'secondary' | 'danger' | 'outline' | 'danger-outline';
   loading?: boolean;
   disabled?: boolean;
   style?: ViewStyle;
@@ -38,6 +38,11 @@ export function Button({
     backgroundColor = 'transparent';
     textColor = theme.primary;
     borderColor = theme.primary;
+    borderWidth = 1;
+  } else if (variant === 'danger-outline') {
+    backgroundColor = 'transparent';
+    textColor = theme.danger;
+    borderColor = theme.danger;
     borderWidth = 1;
   }
 

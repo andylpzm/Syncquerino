@@ -42,5 +42,12 @@
     "web": "expo start --web",
     "test": "jest"
   },
-  "private": true
+  "private": true,
+  "jest": {
+    "preset": "jest-expo",
+    "testMatch": [
+      "**/*.test.ts",
+      "**/*.test.tsx"
+    ]
+  }
 }

@@ -8,6 +8,8 @@ import {
   Alert,
   Image,
   Modal,
+  KeyboardAvoidingView,
+  Platform,
   Animated as RNAnimated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -240,7 +242,7 @@ export function GroceryListScreen() {
       title: d.title,
       status: 'active' as const,
       isDraft: true,
-      imageUrl: d.desc || undefined, // display local draft photo in list
+      imageUrl: d.imageUrl || undefined, // display local draft photo in list
     }));
 
   const combinedData = [...localDrafts, ...items];
@@ -378,7 +380,8 @@ export function GroceryListScreen() {
           </View>
         )}
 
-        {/* toggleable add item form section */}
+        {/* toggleable add item form section, lifted clear of the soft keyboard */}
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         {showAddForm ? (
           <Animated.View
             entering={FadeInDown.duration(300)}
@@ -456,6 +459,7 @@ export function GroceryListScreen() {
             />
           </Animated.View>
         )}
+        </KeyboardAvoidingView>
 
         {/* virtualized list of grocery items */}
         {loading ? (

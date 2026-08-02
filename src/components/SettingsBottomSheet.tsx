@@ -30,12 +30,14 @@ interface SettingsBottomSheetProps {
   visible: boolean;
   onClose: () => void;
   onToast: (msg: string) => void;
+  onOpenGroupSettings: () => void;
 }
 
 export function SettingsBottomSheet({
   visible,
   onClose,
   onToast,
+  onOpenGroupSettings,
 }: SettingsBottomSheetProps) {
   const { theme, spacing, radii, typography } = useTheme();
 
@@ -274,14 +276,29 @@ export function SettingsBottomSheet({
               )}
             </View>
 
-            {/* Action 4: Sign Out Button */}
-            <Button
-              title="Sign Out"
-              onPress={handleSignOut}
-              variant="danger"
-              style={styles.actionModalBtn}
-            />
+            {/* Action 4: Circle Settings */}
+            <View style={[styles.actionCard, { borderColor: theme.border }]}>
+              <Pressable
+                style={styles.actionCardHeader}
+                onPress={() => { onClose(); onOpenGroupSettings(); }}
+              >
+                <Ionicons name="people-outline" size={18} color={theme.primary} />
+                <Text style={[styles.actionCardTitle, { color: theme.text, ...typography.body }]}>
+                  Circle Settings &amp; Members
+                </Text>
+              </Pressable>
+            </View>
           </ScrollView>
+
+          {/* separated from the scroll area with a divider and real spacing so it
+              can't be brushed by mistake right after tapping a row above it */}
+          <View style={[styles.signOutDivider, { borderTopColor: theme.border }]} />
+          <Button
+            title="Sign Out"
+            onPress={handleSignOut}
+            variant="danger-outline"
+            style={styles.actionModalBtn}
+          />
         </View>
       </View>
     </Modal>
@@ -321,8 +338,15 @@ const styles = StyleSheet.create({
   closeBtn: {
     padding: 4,
   },
+  // no fixed height: shrinks to whatever room bottomSheet's 80% cap leaves
+  // after the header, divider and Sign Out button, so it only scrolls when
+  // the content genuinely doesn't fit (e.g. an edit form expanded on a small screen)
   sheetList: {
-    maxHeight: 350,
+    flexShrink: 1,
+  },
+  signOutDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginTop: 16,
   },
   actionModalBtn: {
     marginTop: 16,

@@ -8,7 +8,7 @@ service cloud.firestore {
     }
 
     function isGroupMember(groupId) {
-      return isAuthenticated() && 
+      return isAuthenticated() &&
         request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.members;
     }
 
@@ -18,13 +18,47 @@ service cloud.firestore {
       allow create, update: if isAuthenticated() && request.auth.uid == userId;
     }
 
+    // invite code -> circle lookup. the document id IS the invite code.
+    // this lets a non-member resolve a code with a single-document read,
+    // without widening read access on the groups collection itself.
+    match /groupCodes/{code} {
+      allow get: if isAuthenticated();
+      allow list: if false;
+      allow create: if isAuthenticated()
+        && request.resource.data.keys().hasOnly(['groupId'])
+        && request.resource.data.groupId is string
+        && get(/databases/$(database)/documents/groups/$(request.resource.data.groupId)).data.createdBy == request.auth.uid;
+      // update and delete are denied on purpose: writing an already-taken code
+      // then fails, which is how the client detects a collision.
+      allow update, delete: if false;
+    }
+
     // household groups collection
     match /groups/{groupId} {
-      // allow read to group members or when querying by room code
-      allow read: if isAuthenticated() && (request.auth.uid in resource.data.members || resource == null);
+      // members only. invite codes are resolved through /groupCodes instead of
+      // by querying this collection, so no wider read access is needed.
+      allow read: if isAuthenticated() && request.auth.uid in resource.data.members;
       allow create: if isAuthenticated() && request.resource.data.createdBy == request.auth.uid;
-      allow update: if isAuthenticated() && 
-        (request.auth.uid == resource.data.createdBy || request.auth.uid in resource.data.members);
+      allow update: if isAuthenticated() &&
+        (
+          request.auth.uid == resource.data.createdBy
+          ||
+          (
+            request.auth.uid in resource.data.members
+            // Allow members to add others or leave, but not remove other members
+            && request.resource.data.members.hasAll(resource.data.members.removeAll([request.auth.uid]))
+            // Prevent non-owners from changing the owner
+            && request.resource.data.createdBy == resource.data.createdBy
+          )
+          ||
+          (
+            // self-join: a non-member may append only their own uid to members
+            // and may not touch any other field
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])
+            && !(request.auth.uid in resource.data.members)
+            && request.resource.data.members == resource.data.members.concat([request.auth.uid])
+          )
+        );
       allow delete: if isAuthenticated() && request.auth.uid == resource.data.createdBy;
     }
 

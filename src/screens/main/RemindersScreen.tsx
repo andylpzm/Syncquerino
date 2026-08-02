@@ -113,7 +113,7 @@ export function RemindersScreen() {
   const selectedDueDate = watch('dueDate');
   const selectedAssignee = watch('assigneeName');
 
-  // reset transient open forms and modals whenever the screen loses focus (e.g. user switches tabs)
+  // reset open forms and modals whenever the screen loses focus
   useFocusEffect(
     React.useCallback(() => {
       return () => {
@@ -216,8 +216,8 @@ export function RemindersScreen() {
       addDraft({
         category: 'reminder',
         title: data.title.trim(),
-        assigneeName: data.assigneeName?.trim() || 'anyone',
-        dueDate: data.dueDate?.trim() || 'select date',
+        assigneeName: data.assigneeName?.trim() || 'Anyone',
+        dueDate: data.dueDate?.trim() || '',
       });
       reset();
       setShowAddForm(false);
@@ -229,8 +229,8 @@ export function RemindersScreen() {
         groupId: activeGroup.id,
         category: 'reminder',
         title: data.title.trim(),
-        assigneeName: data.assigneeName?.trim() || 'anyone',
-        dueDate: data.dueDate?.trim() || 'select date',
+        assigneeName: data.assigneeName?.trim() || 'Anyone',
+        dueDate: data.dueDate?.trim() || '',
         status: 'active',
         createdAt: new Date(),
       };
@@ -245,10 +245,6 @@ export function RemindersScreen() {
   // initialize edit modal state
   const startEditChore = (item: ReminderItem) => {
     dismissSwipeables();
-    if (!isOnline) {
-      Alert.alert('Offline Mode', 'editing existing chores is disabled while offline.');
-      return;
-    }
     setEditingReminderId(item.id);
     setEditTitle(item.title);
     setEditAssignee(item.assigneeName || 'Anyone');
@@ -265,18 +261,28 @@ export function RemindersScreen() {
       Alert.alert('Validation Error', 'chore name is required.');
       return;
     }
+    const editedFields = {
+      title: editTitle.trim(),
+      assigneeName: editAssignee.trim() || 'Anyone',
+      dueDate: editDueDate.trim() || '',
+    };
+
     if (!isOnline) {
-      Alert.alert('Offline Mode', 'editing existing chores is disabled.');
+      // offline mode: queue the edit and apply it when the connection returns
+      addDraft({
+        category: 'reminder',
+        itemId: editingReminderId,
+        title: editedFields.title,
+        assigneeName: editedFields.assigneeName,
+        dueDate: editedFields.dueDate,
+      });
+      closeEditModal();
       return;
     }
 
     setLoading(true);
     try {
-      await updateDoc(doc(db, 'items', editingReminderId), {
-        title: editTitle.trim(),
-        assigneeName: editAssignee.trim() || 'Anyone',
-        dueDate: editDueDate.trim() || '',
-      });
+      await updateDoc(doc(db, 'items', editingReminderId), editedFields);
       closeEditModal();
     } catch (e: any) {
       Alert.alert('Database Error', `failed to save chore. error: ${e.message || String(e)}`);
@@ -329,7 +335,7 @@ export function RemindersScreen() {
 
   // combine local pending drafts with loaded firestore chores
   const localDrafts = drafts
-    .filter((d) => d.category === 'reminder')
+    .filter((d) => d.category === 'reminder' && !d.itemId)
     .map((d) => ({
       id: d.id,
       title: d.title,
@@ -339,12 +345,25 @@ export function RemindersScreen() {
       isDraft: true,
     }));
 
-  const combinedData = [...localDrafts, ...items].sort((a, b) => {
+  // overlay any edits still queued offline so the user sees their own change immediately
+  const itemsWithPendingEdits = items.map((item) => {
+    const queued = drafts.filter((d) => d.itemId === item.id);
+    if (queued.length === 0) return item;
+    const latest = queued[queued.length - 1];
+    return {
+      ...item,
+      title: latest.title,
+      assigneeName: latest.assigneeName,
+      dueDate: latest.dueDate,
+    };
+  });
+
+  const combinedData = [...localDrafts, ...itemsWithPendingEdits].sort((a, b) => {
     if (a.status !== b.status) {
       return a.status === 'active' ? -1 : 1;
     }
-    const dateA = a.dueDate && a.dueDate.trim() && a.dueDate !== 'select date' ? a.dueDate.trim() : '9999-99-99';
-    const dateB = b.dueDate && b.dueDate.trim() && b.dueDate !== 'select date' ? b.dueDate.trim() : '9999-99-99';
+    const dateA = a.dueDate && a.dueDate.trim() ? a.dueDate.trim() : '9999-99-99';
+    const dateB = b.dueDate && b.dueDate.trim() ? b.dueDate.trim() : '9999-99-99';
     if (dateA !== dateB) {
       return dateA.localeCompare(dateB);
     }
@@ -486,7 +505,7 @@ export function RemindersScreen() {
         {!isOnline && (
           <View style={[styles.offlineBanner, { backgroundColor: theme.warning, borderRadius: radii.sm }]}>
             <Text style={[styles.offlineText, { ...typography.caption }]}>
-              Offline Mode: tasks will sync once back online
+              Offline Mode: additions will sync once connected
             </Text>
           </View>
         )}

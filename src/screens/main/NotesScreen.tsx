@@ -183,10 +183,6 @@ export function NotesScreen() {
 
   // initialize edit modal state
   const startEditNote = (item: NoteItem) => {
-    if (!isOnline) {
-      Alert.alert('Offline Mode', 'editing existing notes is disabled while offline.');
-      return;
-    }
     setEditingNoteId(item.id);
     setEditTitle(item.title);
     setEditDesc(item.desc);
@@ -205,18 +201,28 @@ export function NotesScreen() {
       Alert.alert('Validation Error', 'note description is required.');
       return;
     }
+    const editedFields = {
+      title: editTitle.trim(),
+      desc: editDesc.trim(),
+      imageUrl: editImage || '',
+    };
+
     if (!isOnline) {
-      Alert.alert('Offline Mode', 'editing existing notes is disabled.');
+      // offline mode: queue the edit and apply it when the connection returns
+      addDraft({
+        category: 'note',
+        itemId: editingNoteId,
+        title: editedFields.title,
+        desc: editedFields.desc,
+        imageUrl: editedFields.imageUrl,
+      });
+      closeEditModal();
       return;
     }
 
     setUploading(true);
     try {
-      await updateDoc(doc(db, 'items', editingNoteId), {
-        title: editTitle.trim(),
-        desc: editDesc.trim(),
-        imageUrl: editImage || '',
-      });
+      await updateDoc(doc(db, 'items', editingNoteId), editedFields);
       closeEditModal();
     } catch (e: any) {
       Alert.alert('Database Error', `failed to save note. error: ${e.message || String(e)}`);
@@ -300,7 +306,7 @@ export function NotesScreen() {
 
   // combine local pending drafts with loaded firestore notes
   const localDrafts: NoteItem[] = drafts
-    .filter((d) => d.category === 'note')
+    .filter((d) => d.category === 'note' && !d.itemId)
     .map((d) => ({
       id: d.id,
       title: d.title,
@@ -308,10 +314,23 @@ export function NotesScreen() {
       creatorName: d.assigneeName, // using assigneeName field to store author in draft object
       createdAtText: 'sync pending',
       isDraft: true,
-      imageUrl: d.dueDate || undefined, // display local draft photo in list
+      imageUrl: d.imageUrl || undefined, // display local draft photo in list
     }));
 
-  const combinedData = [...localDrafts, ...items];
+  // overlay any edits still queued offline so the user sees their own change immediately
+  const itemsWithPendingEdits = items.map((item) => {
+    const queued = drafts.filter((d) => d.itemId === item.id);
+    if (queued.length === 0) return item;
+    const latest = queued[queued.length - 1];
+    return {
+      ...item,
+      title: latest.title,
+      desc: latest.desc || '',
+      imageUrl: latest.imageUrl || undefined,
+    };
+  });
+
+  const combinedData = [...localDrafts, ...itemsWithPendingEdits];
 
   const currentUserIdentifier = auth.currentUser?.displayName || auth.currentUser?.email || 'member';
 
@@ -412,8 +431,16 @@ export function NotesScreen() {
                     },
                   ]}
                 >
-                  {item.title} {item.isDraft && '(pending)'}
+                  {item.title}
                 </Text>
+                {item.isDraft && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: spacing.xs }}>
+                    <Ionicons name="time-outline" size={14} color="#f59e0b" />
+                    <Text style={{ color: theme.textMuted, fontStyle: 'italic', marginLeft: 2, ...typography.caption }}>
+                      (pending sync)
+                    </Text>
+                  </View>
+                )}
               </View>
               <Text
                 style={[
@@ -482,6 +509,7 @@ export function NotesScreen() {
           </View>
         )}
 
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         {showAddForm ? (
           <Animated.View
             entering={FadeInDown.duration(300)}
@@ -574,6 +602,7 @@ export function NotesScreen() {
             />
           </Animated.View>
         )}
+        </KeyboardAvoidingView>
 
         {loading ? (
           <ActivityIndicator size="large" color={theme.primary} style={styles.spinner} />
@@ -659,7 +688,7 @@ export function NotesScreen() {
 
       {/* visual overlay viewer for fullscreen photo preview */}
       <Modal visible={!!activePhotoUrl} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, styles.lightboxBackdrop]}>
           <Pressable style={styles.modalCloseArea} onPress={() => setActivePhotoUrl(null)} />
           <View style={styles.modalContent}>
             {activePhotoUrl && (
@@ -805,6 +834,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  lightboxBackdrop: {
+    // §9.3: image lightbox uses a higher-contrast backdrop than the form modal overlay above
+    backgroundColor: 'rgba(0,0,0,0.85)',
   },
   modalCloseArea: {
     ...StyleSheet.absoluteFill,

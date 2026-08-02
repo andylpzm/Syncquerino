@@ -1,6 +1,6 @@
 // state provider using usereducer to manage offline pending drafts and auto-sync when back online
 import React, { createContext, useContext, useReducer, useEffect, useMemo, useCallback, useRef } from 'react';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { useIsOnline } from '../hooks/useIsOnline';
 import { useActiveGroup } from './ActiveGroupContext';
 import { auth, db } from '../services/firebase';
@@ -13,6 +13,9 @@ export interface DraftItem {
   assigneeName?: string;
   dueDate?: string;
   imageUrl?: string;
+  // when set, this draft is an edit to an item that already exists in firestore
+  // rather than a brand new card waiting to be created
+  itemId?: string;
 }
 
 interface State {
@@ -81,6 +84,23 @@ export function StateProvider({ children }: { children: React.ReactNode }) {
         const draftsToSync = [...state.drafts];
         for (const draft of draftsToSync) {
           try {
+            if (draft.itemId) {
+              // queued edit: apply it to the existing document instead of creating one
+              const updates: any = { title: draft.title };
+
+              if (draft.category === 'note') {
+                updates.desc = draft.desc || '';
+                updates.imageUrl = draft.imageUrl || '';
+              } else if (draft.category === 'reminder') {
+                updates.assigneeName = draft.assigneeName || 'Anyone';
+                updates.dueDate = draft.dueDate || '';
+              }
+
+              await updateDoc(doc(db, 'items', draft.itemId), updates);
+              dispatch({ type: 'REMOVE_DRAFT', payload: draft.id });
+              continue;
+            }
+
             const docData: any = {
               groupId: activeGroup.id,
               category: draft.category,
