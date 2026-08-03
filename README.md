@@ -20,7 +20,7 @@ The app consists of four core modules:
 * **Icons & Styling**: `@expo/vector-icons` (`Ionicons`), React Native Gesture Handler (`FlatList`, `Swipeable`), and Reanimated spring transitions
 * **Navigation**: React Navigation v7 (Bottom Tabs + Native Stacks)
 * **Backend & Sync**: Google Firebase Auth & Cloud Firestore (real-time `onSnapshot` listeners, offline write queue `useReducer`)
-* **Hardware Integrations**: `expo-image-picker` image selection, and native Tactile Haptics feedback (`expo-haptics`)
+* **Hardware Integrations**: Camera capture with runtime permissions (`expo-image-picker`), tactile haptics (`expo-haptics`), live network status (`@react-native-community/netinfo`), clipboard (`expo-clipboard`), and native share sheet
 * **Form Controls**: React Hook Form & Zod schema validation (with input length boundaries)
 * **Testing Engine**: Jest unit testing of utility functions
 
@@ -67,3 +67,18 @@ npx tsc --noEmit
 # Run Jest Unit Tests
 npm test
 ```
+
+---
+
+## 4. Requirements Checklist
+
+| # | Requirement | How it's done | Where |
+|---|---|---|---|
+| **1** | Navigation across multiple screens | React Navigation v7. The root navigator swaps between the auth flow and the main app depending on whether someone is signed in, with bottom tabs nested inside a native stack. 11 screens in total. | `navigation/AppNavigator.tsx:27`<br>`navigation/MainNavigator.tsx:16` |
+| **2** | State management | Three React Contexts. The offline queue is the interesting one — `useReducer` holds writes made while disconnected and flushes them when the connection comes back. | `context/StateContext.tsx:34`<br>`context/ActiveGroupContext.tsx` |
+| **3** | TypeScript used properly | Strict mode, no compiler errors, around 40 interfaces and types. Navigator routes are typed so a wrong screen name won't compile, and form types are inferred from the Zod schemas. | `tsconfig.json:4`<br>`navigation/types.ts:10` |
+| **4** | Backend integration | Firebase Auth and Cloud Firestore. Screens subscribe with `onSnapshot`, so a change on one phone shows up on another without refreshing. Access isn't just hidden in the UI — it's enforced by rules running on Firestore. | `screens/main/GroceryListScreen.tsx:107`<br>`firestore.rules` |
+| **5** | Local data persistence | AsyncStorage keeps the active circle and theme preference between launches. The circle is re-checked against Firestore on sign-in, so a new account on the same phone doesn't inherit the previous one. | `context/ActiveGroupContext.tsx:22`<br>`theme/ThemeContext.tsx:24` |
+| **6** | Device hardware | Five things: the camera (with runtime permission requests), haptic feedback, network status, clipboard, and the native share sheet for sending invite codes. | `screens/main/GroceryListScreen.tsx:135`<br>`hooks/useIsOnline.ts:10` |
+| **7** | Clean, responsive UI | Every screen uses SafeAreaView, forms move out of the way of the keyboard, and layouts are flex and percentage based rather than fixed sizes. Spacing and colours come from one token file, plus a light/dark/system picker in settings. | `theme/tokens.ts`<br>`components/SettingsBottomSheet.tsx:293` |
+| **8** | Error handling and loading states | Every network call is wrapped in try/catch with a message the user can act on. There's a loading gate while the session restores, spinners on the list screens, validation on all 10 forms, and empty states for empty lists. | `navigation/AppNavigator.tsx:17`<br>`screens/main/GroceryListScreen.tsx:191` |
