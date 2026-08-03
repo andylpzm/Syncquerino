@@ -476,7 +476,7 @@ export function RemindersScreen() {
                 )}
               </Pressable>
             </View>
-            <View style={styles.choreFooter}>
+            <View style={[styles.choreFooter, { borderTopColor: theme.border }]}>
               <Text style={[styles.metaText, { color: theme.textMuted, ...typography.small }]}>
                 Assigned to: {item.assigneeName}
               </Text>
@@ -1022,7 +1022,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#e5e7eb',
     paddingTop: 8,
   },
   metaText: {

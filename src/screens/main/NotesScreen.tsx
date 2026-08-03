@@ -475,7 +475,7 @@ export function NotesScreen() {
                 </Pressable>
               ) : null}
 
-              <View style={styles.cardFooter}>
+              <View style={[styles.cardFooter, { borderTopColor: theme.border }]}>
                 <Text style={[styles.metaText, { color: theme.textMuted, ...typography.small }]}>
                   posted by {item.creatorName}
                 </Text>
@@ -642,7 +642,7 @@ export function NotesScreen() {
               <View>
                 <Text style={[styles.fieldLabel, { color: theme.textMuted, ...typography.small }]}>Title</Text>
                 <TextInput
-                  style={[styles.inlineInput, { color: theme.text, borderColor: theme.border, borderRadius: radii.sm, padding: spacing.sm, ...typography.body }]}
+                  style={[styles.inlineInput, { color: theme.text, backgroundColor: theme.background, borderColor: theme.border, borderRadius: radii.sm, padding: spacing.sm, ...typography.body }]}
                   placeholder="Note Title"
                   placeholderTextColor={theme.textMuted}
                   value={editTitle}
@@ -653,7 +653,7 @@ export function NotesScreen() {
               <View>
                 <Text style={[styles.fieldLabel, { color: theme.textMuted, ...typography.small }]}>Description</Text>
                 <TextInput
-                  style={[styles.inlineInput, { color: theme.text, borderColor: theme.border, borderRadius: radii.sm, padding: spacing.sm, ...typography.body, minHeight: 80 }]}
+                  style={[styles.inlineInput, { color: theme.text, backgroundColor: theme.background, borderColor: theme.border, borderRadius: radii.sm, padding: spacing.sm, ...typography.body, minHeight: 80 }]}
                   placeholder="Note details..."
                   placeholderTextColor={theme.textMuted}
                   value={editDesc}
@@ -819,7 +819,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#e5e7eb',
     paddingTop: 8,
   },
   metaText: {
@@ -860,7 +859,6 @@ const styles = StyleSheet.create({
   },
   inlineInput: {
     borderWidth: 1,
-    backgroundColor: '#f9fafb',
     marginTop: 4,
   },
   editPopup: {

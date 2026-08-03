@@ -26,6 +26,12 @@ import { useTheme } from '../theme/ThemeContext';
 import { auth, db } from '../services/firebase';
 import { Button } from './Button';
 
+const THEME_OPTIONS: { value: 'system' | 'light' | 'dark'; label: string }[] = [
+  { value: 'system', label: 'System' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+];
+
 interface SettingsBottomSheetProps {
   visible: boolean;
   onClose: () => void;
@@ -39,7 +45,7 @@ export function SettingsBottomSheet({
   onToast,
   onOpenGroupSettings,
 }: SettingsBottomSheetProps) {
-  const { theme, spacing, radii, typography } = useTheme();
+  const { theme, spacing, radii, typography, themePreference, setThemePreference } = useTheme();
 
   // account settings editing states
   const [editingName, setEditingName] = useState(false);
@@ -276,7 +282,37 @@ export function SettingsBottomSheet({
               )}
             </View>
 
-            {/* Action 4: Circle Settings */}
+            {/* Action 4: Appearance */}
+            <View style={[styles.actionCard, { borderColor: theme.border }]}>
+              <View style={styles.actionCardHeader}>
+                <Ionicons name="contrast-outline" size={18} color={theme.primary} />
+                <Text style={[styles.actionCardTitle, { color: theme.text, ...typography.body }]}>
+                  Appearance
+                </Text>
+              </View>
+              <View style={[styles.segmentedControl, { backgroundColor: theme.background, borderColor: theme.border }]}>
+                {THEME_OPTIONS.map(({ value, label }) => {
+                  const selected = themePreference === value;
+                  return (
+                    <Pressable
+                      key={value}
+                      onPress={() => setThemePreference(value)}
+                      style={({ pressed }) => [
+                        styles.segment,
+                        selected && { backgroundColor: theme.primary },
+                        { opacity: pressed ? 0.75 : 1 },
+                      ]}
+                    >
+                      <Text style={[styles.segmentText, { color: selected ? theme.surface : theme.textMuted }]}>
+                        {label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+
+            {/* Action 5: Circle Settings */}
             <View style={[styles.actionCard, { borderColor: theme.border }]}>
               <Pressable
                 style={styles.actionCardHeader}
@@ -393,6 +429,24 @@ const styles = StyleSheet.create({
   },
   formContainer: {
     marginTop: 12,
+  },
+  segmentedControl: {
+    flexDirection: 'row',
+    marginTop: 12,
+    padding: 3,
+    borderWidth: 1,
+    borderRadius: 10,
+    gap: 4,
+  },
+  segment: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  segmentText: {
+    fontWeight: '600',
+    fontSize: 13,
   },
   input: {
     borderWidth: 1,

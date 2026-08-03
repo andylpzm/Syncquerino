@@ -34,6 +34,9 @@ yarn-error.*
 .env
 .env*.local
 
+# firebase CLI project alias (machine-local, not needed to build/run the app)
+.firebaserc
+
 # IDE
 .idea/
 *.iml
